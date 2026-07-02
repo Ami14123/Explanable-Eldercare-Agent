@@ -20,3 +20,5 @@ data/processed/*
 models/*.joblib
 models/router_dataset.csv
 logs/
+
+streamlit_app.zip
