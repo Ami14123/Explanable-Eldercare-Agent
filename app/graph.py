@@ -1,6 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
+import logging
+import os
 import time
 import traceback
 from datetime import datetime, timezone
@@ -25,8 +27,11 @@ from app.memory import (
     update_user_summary,
 )
 from app.memory_classifier import classify_memory, profile_updates_from_memories
+from app.ml_router import extract_latest_user_text, predict_route
 from app.schemas import ChatRequest, ChatResponse
 
+
+logger = logging.getLogger(__name__)
 
 LANGGRAPH_PATH = [
     "START",
@@ -451,7 +456,7 @@ def memory_context_builder_node(state: ElderGuardState) -> ElderGuardState:
     return _trace(state, "memory_context_builder", memory_context=memory_context)
 
 
-def router_node(state: ElderGuardState) -> ElderGuardState:
+def rule_router_node(state: ElderGuardState) -> ElderGuardState:
     message = state["request"].message
     text = message.lower()
     history_text = " ".join(
@@ -512,9 +517,327 @@ def router_node(state: ElderGuardState) -> ElderGuardState:
         "detected_signals": list(dict.fromkeys(signals)),
         "priority": "high" if high_risk else "medium" if medium_risk else "low",
         "reason": "Local router selected broad agents from latest user message.",
+        "router_source": "rules",
     }
     return _trace(state, "router", router_decision=router_decision)
 
+
+def ml_router_is_enabled() -> bool:
+    return os.getenv("USE_ML_ROUTER", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+GRAPH_ROUTE_TO_TOPIC = {
+    "safety_agent": "safety",
+    "health_daily_care_agent": "health_daily_care",
+    "emotional_social_agent": "emotional_support",
+    "action_agent": "action",
+}
+
+
+def _update_router_state(
+    rule_state: ElderGuardState,
+    router_decision: dict[str, Any],
+) -> ElderGuardState:
+    """
+    Update router_decision and keep the router trace consistent.
+    """
+
+    updated_state: ElderGuardState = {
+        **rule_state,
+        "router_decision": router_decision,
+    }
+
+    trace = list(
+        updated_state.get(
+            "langgraph_trace",
+            [],
+        )
+    )
+
+    if trace:
+        latest_trace = trace[-1]
+
+        latest_trace["active_topic"] = (
+            router_decision.get(
+                "active_topic",
+                "",
+            )
+        )
+
+        latest_trace["activated_agents"] = (
+            router_decision.get(
+                "activated_agents",
+                [],
+            )
+        )
+
+        attributes = latest_trace.setdefault(
+            "attributes",
+            {},
+        )
+
+        attributes["router_decision"] = (
+            router_decision
+        )
+
+        attributes["active_topic"] = (
+            router_decision.get(
+                "active_topic",
+                "",
+            )
+        )
+
+        attributes["selected_agent"] = (
+            router_decision.get(
+                "selected_agent",
+                "",
+            )
+        )
+
+        attributes["activated_agents"] = (
+            router_decision.get(
+                "activated_agents",
+                [],
+            )
+        )
+
+        attributes["router_source"] = (
+            router_decision.get(
+                "router_source",
+                "",
+            )
+        )
+
+        attributes["ml_candidate"] = (
+            router_decision.get(
+                "ml_candidate",
+                "",
+            )
+        )
+
+    updated_state["langgraph_trace"] = trace
+
+    return updated_state
+
+
+def router_node(
+    state: ElderGuardState,
+) -> ElderGuardState:
+    """
+    Safe hybrid router.
+
+    Rules remain responsible for:
+    1. High risk situations
+    2. Action requests
+    3. Multi agent requests
+    4. Context dependent follow up messages
+
+    ML handles normal single agent routing.
+    """
+
+    rule_state = rule_router_node(
+        state
+    )
+
+    router_decision = dict(
+        rule_state.get(
+            "router_decision",
+            {},
+        )
+    )
+
+    if not ml_router_is_enabled():
+        logger.info(
+            "Router source=rules"
+        )
+
+        return rule_state
+
+    try:
+        user_text = extract_latest_user_text(
+            state
+        )
+
+        ml_route = predict_route(
+            user_text
+        )
+
+        rule_agents = list(
+            router_decision.get(
+                "activated_agents",
+                [],
+            )
+        )
+
+        rule_route = str(
+            router_decision.get(
+                "selected_agent",
+                "",
+            )
+        )
+
+        priority = str(
+            router_decision.get(
+                "priority",
+                "low",
+            )
+        )
+
+        active_topic = str(
+            router_decision.get(
+                "active_topic",
+                "",
+            )
+        )
+
+        detected_signals = list(
+            router_decision.get(
+                "detected_signals",
+                [],
+            )
+        )
+
+        router_decision["ml_candidate"] = (
+            ml_route
+        )
+
+        must_keep_rules = (
+            priority == "high"
+            or "action_agent" in rule_agents
+            or len(rule_agents) > 1
+        )
+
+        if must_keep_rules:
+            router_decision["router_source"] = (
+                "rules_override"
+            )
+
+            router_decision["reason"] = (
+                "Rules were kept because the message "
+                "contains a high risk situation, "
+                "an action request, or multiple agents."
+            )
+
+            logger.info(
+                "Router source=rules_override "
+                "rule=%s ml=%s",
+                rule_agents,
+                ml_route,
+            )
+
+            return _update_router_state(
+                rule_state,
+                router_decision,
+            )
+
+        rule_has_clear_evidence = (
+            bool(detected_signals)
+            and active_topic
+            != "general_daily_life"
+        )
+
+        if (
+            rule_has_clear_evidence
+            and ml_route != rule_route
+        ):
+            router_decision["router_source"] = (
+                "rules_ml_disagreement"
+            )
+
+            router_decision["reason"] = (
+                "ML and rule routing disagreed. "
+                "The rule route was kept because "
+                "the rule router found clear evidence."
+            )
+
+            logger.warning(
+                "Router disagreement "
+                "rule=%s ml=%s signals=%s",
+                rule_route,
+                ml_route,
+                detected_signals,
+            )
+
+            return _update_router_state(
+                rule_state,
+                router_decision,
+            )
+
+        router_decision["selected_agent"] = (
+            ml_route
+        )
+
+        router_decision["activated_agents"] = [
+            ml_route
+        ]
+
+        router_decision["ml_route"] = (
+            ml_route
+        )
+
+        if ml_route == rule_route:
+            router_decision["router_source"] = (
+                "ml_confirmed"
+            )
+
+            router_decision["reason"] = (
+                "ML and rule routing selected "
+                "the same specialist."
+            )
+
+        else:
+            router_decision["router_source"] = (
+                "ml"
+            )
+
+            router_decision["active_topic"] = (
+                GRAPH_ROUTE_TO_TOPIC.get(
+                    ml_route,
+                    "general_daily_life",
+                )
+            )
+
+            router_decision["reason"] = (
+                "The rule router had no clear signal, "
+                "so the ML router selected the specialist."
+            )
+
+        logger.info(
+            "Router source=%s route=%s",
+            router_decision[
+                "router_source"
+            ],
+            ml_route,
+        )
+
+        return _update_router_state(
+            rule_state,
+            router_decision,
+        )
+
+    except Exception as error:
+        logger.exception(
+            "ML router failed. "
+            "Using rule router fallback."
+        )
+
+        router_decision["router_source"] = (
+            "rules_fallback"
+        )
+
+        router_decision["ml_router_error"] = (
+            str(error)
+        )
+
+        router_decision["reason"] = (
+            "The ML router failed, so the "
+            "rule router result was retained."
+        )
+
+        return _update_router_state(
+            rule_state,
+            router_decision,
+        )
 
 def _agent_result(agent: str, risk: str, signals: list[str], actions: list[str], avoid: list[str], missing: list[str]) -> dict[str, Any]:
     return {
