@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+python-dotenv==1.0.1
+langgraph==0.2.60
+langchain==0.3.13
+langchain-community==0.3.13
+faiss-cpu==1.9.0.post1
+pandas==2.2.3
+kaggle==1.6.17
+kagglehub==0.3.6
+streamlit==1.41.1
+requests==2.32.3
+openai==1.59.6
