@@ -1,9 +1,12 @@
+# Central Streamlit CSS for ElderGuard screens.
 from __future__ import annotations
 
 import streamlit as st
 
 
+# Inject shared styles once so all UI panels have consistent spacing and colors.
 def apply_styles() -> None:
+    # The CSS string is user-visible styling only, not application logic.
     st.markdown(
         """
         <style>

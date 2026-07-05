@@ -1,3 +1,4 @@
+# Security tests for admin auth, public chat access, and sanitized errors.
 from __future__ import annotations
 
 import os
@@ -8,6 +9,7 @@ from app.config import get_settings
 from app.main import app
 
 
+# Build a TestClient with deterministic mock settings.
 def _client_with_admin_token(token: str = "test-admin-token") -> TestClient:
     os.environ["ADMIN_API_TOKEN"] = token
     os.environ["LLM_MODE"] = "mock"
@@ -15,6 +17,7 @@ def _client_with_admin_token(token: str = "test-admin-token") -> TestClient:
     return TestClient(app)
 
 
+# Logs should reject unauthenticated admin access without leaking tracebacks.
 def test_logs_requires_admin_token() -> None:
     client = _client_with_admin_token()
 
@@ -24,6 +27,7 @@ def test_logs_requires_admin_token() -> None:
     assert "traceback" not in response.text.lower()
 
 
+# Admin data operations should require the same token protection as logs.
 def test_admin_data_operations_require_admin_token() -> None:
     client = _client_with_admin_token()
 
@@ -36,6 +40,7 @@ def test_admin_data_operations_require_admin_token() -> None:
     assert "traceback" not in rebuild_response.text.lower()
 
 
+# Wrong admin tokens should be rejected as forbidden.
 def test_logs_rejects_wrong_admin_token() -> None:
     client = _client_with_admin_token()
 
@@ -48,6 +53,7 @@ def test_logs_rejects_wrong_admin_token() -> None:
     assert "traceback" not in response.text.lower()
 
 
+# Correct admin token should allow logs to return a list.
 def test_logs_accepts_correct_admin_token() -> None:
     token = "test-admin-token"
     client = _client_with_admin_token(token)
@@ -61,6 +67,7 @@ def test_logs_accepts_correct_admin_token() -> None:
     assert isinstance(response.json(), list)
 
 
+# Public chat must remain available without admin credentials.
 def test_chat_does_not_require_admin_token() -> None:
     client = _client_with_admin_token()
 
@@ -77,6 +84,7 @@ def test_chat_does_not_require_admin_token() -> None:
     assert response.json()["final_message"]
 
 
+# Public status should avoid exposing local paths or tracebacks.
 def test_status_does_not_expose_local_paths() -> None:
     client = _client_with_admin_token()
 
@@ -89,9 +97,11 @@ def test_status_does_not_expose_local_paths() -> None:
     assert "traceback" not in response.text.lower()
 
 
+# Unexpected chat failures should return sanitized developer_state only.
 def test_chat_error_response_is_sanitized(monkeypatch) -> None:
     from app.api import routes_chat
 
+    # Force the route into its generic error handler.
     def fail_workflow(_request):
         raise RuntimeError("synthetic failure for security test")
 

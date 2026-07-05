@@ -1,10 +1,13 @@
+# Rule-based care knowledge graph used for explainable routing and safety notes.
 from __future__ import annotations
 
 import re
 from typing import Any
 
 
+# Each node maps keywords to an agent, reasoning path, actions, and safety rules.
 CARE_GRAPH = {
+    # Fraud and link-safety nodes catch suspicious email or money-pressure patterns.
     "suspicious_email": {
         "keywords": ["email", "emailed", "unknown email", "don't know them", "do not know them"],
         "agent": "fraud_agent",
@@ -35,6 +38,7 @@ CARE_GRAPH = {
         "still_missing": ["whether daughter confirms sender", "whether email asks for login/payment/download/personal information"],
         "recommended_next_question": "Does the email ask you to log in, pay money, download a file, or share personal information?",
     },
+    # Health nodes catch dizziness, weakness, and fall-related safety risks.
     "dizziness": {
         "keywords": ["dizzy", "dizziness", "lightheaded", "weak", "weakness"],
         "agent": "health_agent",
@@ -66,6 +70,7 @@ CARE_GRAPH = {
             "Recommend a nearby person or caregiver if the user is unsafe walking alone.",
         ],
     },
+    # Medication nodes catch missed-dose and dosage uncertainty.
     "missed_medication": {
         "keywords": ["forgot", "missed", "medicine", "medication", "pill", "dose", "dosage"],
         "agent": "medication_agent",
@@ -83,6 +88,7 @@ CARE_GRAPH = {
         "still_missing": ["medicine name", "usual dose time", "label missed-dose instructions"],
         "recommended_next_question": "What medicine is it, and when were you supposed to take it?",
     },
+    # Daily care nodes cover food, drink, money, and transport support needs.
     "daily_drink_or_food_need": {
         "keywords": ["juice", "water", "drink", "food", "hungry", "groceries", "grocery"],
         "agent": "basic_needs_agent",
@@ -138,6 +144,7 @@ CARE_GRAPH = {
             "Ask where and when the user needs to go.",
         ],
     },
+    # Additional fraud nodes catch banking, authority, and unknown-link pressure.
     "bank_account_request": {
         "keywords": ["bank account", "bank", "otp", "password", "transfer money", "transfer", "crypto", "gift card"],
         "agent": "fraud_agent",
@@ -181,6 +188,7 @@ CARE_GRAPH = {
             "Verify through official contact information, not the caller's instructions.",
         ],
     },
+    # Emotional support nodes catch loneliness and social isolation needs.
     "loneliness": {
         "keywords": ["lonely", "alone", "friend", "friends", "sad", "stressed", "stress", "worried", "talk"],
         "agent": "companion_agent",
@@ -200,20 +208,25 @@ CARE_GRAPH = {
 }
 
 
+# Return the graph dictionary for callers and tests that inspect the rules.
 def build_care_graph() -> dict[str, dict[str, Any]]:
     return CARE_GRAPH
 
 
+# Match whole single-word keywords while allowing phrase keywords by substring.
 def _keyword_matches(lowered: str, keyword: str) -> bool:
     keyword = keyword.lower()
+    # Whole-word matching prevents terms like "fall" matching unrelated words.
     if keyword.replace(" ", "").replace("_", "").isalnum() and " " not in keyword:
         return re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", lowered) is not None
     return keyword in lowered
 
 
+# Query the care graph and return explainable matches for one user message.
 def query_care_graph(message: str) -> dict[str, Any]:
     # Vietnamese note: GraphRAG anh xa tin hieu cua user thanh pathway va safety rule co the giai thich.
     lowered = message.lower()
+    # Collect graph outputs in separate lists so the response can show each part.
     detected_nodes: list[str] = []
     risk_pathways: list[list[str]] = []
     recommended_actions: list[str] = []
@@ -221,13 +234,16 @@ def query_care_graph(message: str) -> dict[str, Any]:
     recommended_questions: list[str] = []
     detected_signals: list[dict[str, str]] = []
 
+    # Scan every node and keep the nodes whose keywords are present.
     for node, data in CARE_GRAPH.items():
+        # Avoid treating "friend" in suspicious email examples as loneliness.
         if node == "loneliness" and ("email" in lowered or "link" in lowered):
             continue
         matched = [keyword for keyword in data["keywords"] if _keyword_matches(lowered, keyword)]
         if not matched:
             continue
 
+        # Merge matched node outputs into the graph reasoning result.
         detected_nodes.append(node)
         risk_pathways.append(data["pathway"])
         recommended_actions.extend(data["actions"])
@@ -242,6 +258,7 @@ def query_care_graph(message: str) -> dict[str, Any]:
             }
         )
 
+    # Deduplicate repeated rules/actions while preserving first-seen order.
     return {
         "detected_nodes": detected_nodes,
         "risk_pathways": risk_pathways,
@@ -261,11 +278,14 @@ def query_care_graph(message: str) -> dict[str, Any]:
     }
 
 
+# Add a short human-readable summary on top of the raw graph result.
 def get_graph_reasoning(message: str) -> dict[str, Any]:
     graph_result = query_care_graph(message)
+    # Empty matches are still explained so the trace is clear.
     if not graph_result["detected_nodes"]:
         graph_result["summary"] = "No specific care graph pathway was triggered."
     else:
+        # Join pathways for compact display in the UI trace.
         pathways = [" -> ".join(pathway) for pathway in graph_result["risk_pathways"]]
         graph_result["summary"] = "Care graph pathways: " + "; ".join(pathways)
     return graph_result

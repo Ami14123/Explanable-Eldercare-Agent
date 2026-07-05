@@ -31,8 +31,10 @@ from app.ml_router import extract_latest_user_text, explain_ml_route
 from app.schemas import ChatRequest, ChatResponse
 
 
+# Main LangGraph workflow for routing, safety checks, response generation, and memory.
 logger = logging.getLogger(__name__)
 
+# Ordered node names used in developer traces and fallback responses.
 LANGGRAPH_PATH = [
     "START",
     "memory_context_builder",
@@ -45,6 +47,7 @@ LANGGRAPH_PATH = [
     "END",
 ]
 
+# Broad specialists used by the simplified routing layer.
 BROAD_AGENTS = {
     "safety_agent": "Fraud, scam, suspicious email, unsafe pressure, emergency/fall danger.",
     "health_daily_care_agent": "Health, medication, food, nutrition, mobility, and daily needs.",
@@ -52,6 +55,7 @@ BROAD_AGENTS = {
     "action_agent": "Write messages, checklists, reminders, caregiver notes, call scripts.",
 }
 
+# Alert levels are ordered so higher-risk alerts are never downgraded.
 ALERT_LEVEL_ORDER = {
     "none": 0,
     "low": 1,
@@ -59,12 +63,14 @@ ALERT_LEVEL_ORDER = {
     "high": 3,
 }
 
+# Concrete replacement text used when fraud responses are too vague.
 CONCRETE_FRAUD_VERIFICATION_GUIDANCE = (
     "Do not rely on how convincing the caller sounds. End the call and verify the claim using an official phone number "
     "that you find independently. Do not use a phone number, link, or contact method provided by the caller. Do not "
     "share passwords, one time codes, banking information, or personal information."
 )
 
+# Phrases that are too vague for scam or fraud safety guidance.
 VAGUE_SAFETY_PHRASES = [
     "trust your instincts",
     "trust your instinct",
@@ -73,6 +79,7 @@ VAGUE_SAFETY_PHRASES = [
     "listen to your intuition",
 ]
 
+# Phrases that imply caregiver contact and must match alert policy.
 CAREGIVER_ACTION_PHRASES = [
     "call your caregiver",
     "contact your caregiver",
@@ -87,6 +94,7 @@ CAREGIVER_ACTION_PHRASES = [
 ]
 
 
+# Shared state passed between LangGraph nodes.
 class ElderGuardState(TypedDict, total=False):
     request: ChatRequest
     memory_context: dict[str, Any]
@@ -102,8 +110,10 @@ class ElderGuardState(TypedDict, total=False):
     trace_last_perf: float
 
 
+# Append one trace span and merge node updates into state.
 def _trace(state: ElderGuardState, node: str, **updates: Any) -> ElderGuardState:
     next_state: ElderGuardState = {**state, **updates}
+    # Measure elapsed time since the previous node.
     trace = list(state.get("langgraph_trace", []))
     now = time.perf_counter()
     last = float(state.get("trace_last_perf", state.get("trace_started_perf", now)))
@@ -114,6 +124,7 @@ def _trace(state: ElderGuardState, node: str, **updates: Any) -> ElderGuardState
         "llm_calls_this_turn": get_llm_call_counter(),
         "final_message_source": next_state.get("coordinated", {}).get("final_message_source", ""),
     }
+    # Add node-specific attributes so each trace row explains its own output.
     if node == "router":
         attributes["router_decision"] = next_state.get("router_decision", {})
     elif node == "broad_agent_reasoning":
@@ -167,15 +178,18 @@ def _trace(state: ElderGuardState, node: str, **updates: Any) -> ElderGuardState
     return next_state
 
 
+# Check whether any trigger term appears in lowercase text.
 def _contains(text: str, terms: list[str]) -> bool:
     return any(term in text for term in terms)
 
 
+# Return the highest risk level from several candidates.
 def _risk_max(*risks: str) -> str:
     order = {"low": 0, "medium": 1, "high": 2}
     return max((risk if risk in order else "low" for risk in risks), key=lambda item: order[item])
 
 
+# Create the default alert decision object.
 def _alert_template() -> dict[str, Any]:
     return {
         "alert_required": False,
@@ -190,6 +204,7 @@ def _alert_template() -> dict[str, Any]:
     }
 
 
+# Update an alert only when the new alert is not lower priority.
 def _set_alert_if_not_downgrade(
     alert: dict[str, Any],
     *,
@@ -202,11 +217,13 @@ def _set_alert_if_not_downgrade(
 ) -> None:
     current_score = ALERT_LEVEL_ORDER.get(str(alert.get("alert_level", "none")), 0)
     next_score = ALERT_LEVEL_ORDER.get(level, 0)
+    # Preserve stronger existing alerts while still recording user contact intent.
     if next_score < current_score:
         if user_requested_contact:
             alert["user_requested_contact"] = True
             alert["human_confirmation_required"] = False
         return
+    # Store the prepared alert and explain that no external notification was sent.
     alert.update(
         {
             "alert_required": True,
@@ -226,10 +243,12 @@ def _set_alert_if_not_downgrade(
     )
 
 
+# Decide whether a message should prepare a caregiver or emergency alert.
 def evaluate_alert_decision(message: str) -> dict[str, Any]:
     text = message.lower()
     alert = _alert_template()
 
+    # Detect health and caregiver-request signals first.
     dizzy_now = _contains(text, ["dizzy", "dizziness", "lightheaded", "light headed"])
     imminent_fall = _contains(
         text,
@@ -277,6 +296,7 @@ def evaluate_alert_decision(message: str) -> dict[str, Any]:
         ],
     )
 
+    # Suspicious messages with sensitive requests can require safety escalation.
     suspicious_email = _contains(text, ["email", "emailed", "link", "click"])
     fraud_action = _contains(text, ["money", "pay", "transfer", "login", "log in", "password", "download", "bank", "otp"])
     if suspicious_email and fraud_action:
@@ -290,6 +310,7 @@ def evaluate_alert_decision(message: str) -> dict[str, Any]:
             caregiver_message="Please check this message with the user before they click links, log in, download files, or send money.",
         )
 
+    # Expired food plus symptoms is a health concern, not just daily support.
     if _contains(text, ["expired food", "expired", "old food"]) and _contains(text, ["stomach pain", "stomach hurts", "belly pain", "vomit", "nausea"]):
         _set_alert_if_not_downgrade(
             alert,
@@ -300,6 +321,7 @@ def evaluate_alert_decision(message: str) -> dict[str, Any]:
             caregiver_message="The user reported expired food and stomach symptoms. Please check on them and consider medical advice if symptoms continue.",
         )
 
+    # Emergency or fall risk receives the strongest alert.
     if imminent_fall or emergency_red_flag:
         reason = "The user reports dizziness and an imminent risk of falling." if dizzy_now and imminent_fall else "The user reported an emergency safety risk."
         _set_alert_if_not_downgrade(
@@ -324,6 +346,7 @@ def evaluate_alert_decision(message: str) -> dict[str, Any]:
     elif dizzy_now:
         alert["alert_reason"] = "Dizziness mentioned without imminent fall or emergency red flags."
 
+    # Medication uncertainty should involve a caregiver or clinician.
     if _contains(text, ["medicine", "medication", "pill", "dose", "dosage", "forgot", "missed"]) and _contains(text, ["unsure", "forgot", "missed", "don't know", "not sure"]):
         _set_alert_if_not_downgrade(
             alert,
@@ -334,6 +357,7 @@ def evaluate_alert_decision(message: str) -> dict[str, Any]:
             caregiver_message="The user is unsure about medication. Please help confirm the label, schedule, or pharmacist instructions.",
         )
 
+    # Self-harm language always requires immediate human support.
     if _contains(text, ["kill myself", "hurt myself", "end my life", "suicide"]):
         _set_alert_if_not_downgrade(
             alert,
@@ -344,6 +368,7 @@ def evaluate_alert_decision(message: str) -> dict[str, Any]:
             caregiver_message="The user used self-harm language. Please get immediate human support and do not leave them alone.",
         )
 
+    # Keep raw signal booleans for explainability panels.
     alert["signals"] = {
         "dizzy_now": dizzy_now,
         "imminent_fall": imminent_fall,
@@ -353,12 +378,14 @@ def evaluate_alert_decision(message: str) -> dict[str, Any]:
     return alert
 
 
+# Apply final response safety checks before the message is saved or returned.
 def apply_output_guardrails(
     response_text: str,
     *,
     alert_decision: dict[str, Any],
     router_decision: dict[str, Any],
 ) -> dict[str, Any]:
+    # Track guardrail findings and whether a safe replacement is needed.
     issues: list[str] = []
     fallback_used = False
     fallback_name = ""
@@ -366,17 +393,20 @@ def apply_output_guardrails(
     lower = response_text.lower()
     active_topic = str(router_decision.get("active_topic", "")).lower()
     agents = " ".join(router_decision.get("activated_agents", [])).lower()
+    # Fraud context can come from topic, agent, or detected signal.
     fraud_context = "safety" in active_topic or "fraud" in active_topic or "safety_agent" in agents or any(
         signal in {"email", "link", "bank", "password", "money", "transfer", "otp", "police"}
         for signal in router_decision.get("detected_signals", [])
     )
 
+    # Replace vague fraud advice with concrete verification guidance.
     if fraud_context and any(phrase in lower for phrase in VAGUE_SAFETY_PHRASES):
         issues.append("vague_safety_advice")
         final = CONCRETE_FRAUD_VERIFICATION_GUIDANCE
         fallback_used = True
         fallback_name = "concrete_fraud_verification_guidance"
 
+    # If text promises caregiver contact without an alert, replace it safely.
     caregiver_action = any(phrase in lower for phrase in CAREGIVER_ACTION_PHRASES)
     if caregiver_action and not alert_decision.get("alert_required", False):
         issues.append("alert_decision_response_mismatch")
@@ -388,11 +418,13 @@ def apply_output_guardrails(
         fallback_used = True
         fallback_name = "caregiver_alert_mismatch_safe_response"
 
+    # Record unsafe instructions so the trace can flag the response.
     if any(term in lower for term in ["take an extra dose", "double your dose", "change your dose"]):
         issues.append("unsafe_medication_instruction")
     if any(term in lower for term in ["share your password", "send the money now", "click the unknown link"]):
         issues.append("unsafe_safety_instruction")
 
+    # Return a small result object that guardrails_node can merge into ChatResponse.
     source = "output_guardrail_replacement" if fallback_used else ""
     return {
         "final_message": final,
@@ -403,7 +435,9 @@ def apply_output_guardrails(
     }
 
 
+# Normalize trace data for the technical trace UI.
 def _normalized_trace(state: ElderGuardState) -> dict[str, Any]:
+    # Sum node durations and gather the latest routing/alert metadata.
     spans = list(state.get("langgraph_trace", []))
     total_duration = round(sum(float(span.get("duration_ms", 0) or 0) for span in spans), 2)
     router = state.get("router_decision", {})
@@ -428,9 +462,11 @@ def _normalized_trace(state: ElderGuardState) -> dict[str, Any]:
     }
 
 
+# Build context from memory and graph reasoning before routing.
 def memory_context_builder_node(state: ElderGuardState) -> ElderGuardState:
     # Vietnamese note: Memory loading + GraphRAG chuan bi ngu canh truoc khi router chon agent.
     request = state["request"]
+    # Prefer sanitized client history when provided by the API caller.
     client_history = [
         {"role": item.get("role", ""), "message": item.get("message") or item.get("content", "")}
         for item in request.client_history[-8:]
@@ -438,12 +474,14 @@ def memory_context_builder_node(state: ElderGuardState) -> ElderGuardState:
     ]
     stored_history = get_recent_conversation(request.user_id, request.conversation_id, limit=8)
     history = client_history if client_history else stored_history
+    # Keep the previous assistant answer to detect follow-up questions.
     previous_assistant = ""
     for item in reversed(history):
         if item.get("role") == "assistant":
             previous_assistant = str(item.get("message", ""))
             break
 
+    # Graph reasoning adds explainable safety paths from local rules.
     graph_context = get_graph_reasoning(request.message)
     memory_context = {
         "current_message": request.message,
@@ -457,6 +495,7 @@ def memory_context_builder_node(state: ElderGuardState) -> ElderGuardState:
     return _trace(state, "memory_context_builder", memory_context=memory_context)
 
 
+# Rule-based router that prioritizes safety and multi-intent messages.
 def rule_router_node(state: ElderGuardState) -> ElderGuardState:
     # Vietnamese note: Hybrid router bat dau bang luat an toan de tranh bo sot rui ro.
     message = state["request"].message
@@ -475,6 +514,7 @@ def rule_router_node(state: ElderGuardState) -> ElderGuardState:
     emotional_terms = ["lonely","alone","sad","worried","worry","afraid","scared","fear","nervous","anxious","stress","stressed","miss","daughter","son","family","children","friend","support"]
     action_terms = ["write", "draft", "message", "checklist", "reminder", "script", "caregiver note", "what should i say"]
 
+    # Safety rules run first so fraud or emergency terms are not missed.
     if _contains(text, safety_terms) or (
         prior_email_topic
         and _contains(text, ["daughter", "friend", "log in", "login", "money", "download", "password", "yes", "no"])
@@ -487,6 +527,7 @@ def rule_router_node(state: ElderGuardState) -> ElderGuardState:
         else:
             topics.append("safety")
         signals.extend([term for term in safety_terms if term in text][:5] or ["email_follow_up"])
+    # Health and daily-care rules catch symptoms, food needs, and medication issues.
     if _contains(text, health_terms):
         activated.append("health_daily_care_agent")
         if _contains(text, ["medicine", "medication", "pill", "dose"]):
@@ -498,18 +539,22 @@ def rule_router_node(state: ElderGuardState) -> ElderGuardState:
         else:
             topics.append("health_daily_care")
         signals.extend([term for term in health_terms if term in text][:5])
+    # Emotional rules cover loneliness and family-support language.
     if _contains(text, emotional_terms):
         activated.append("emotional_social_agent")
         topics.append("emotional_support" if _contains(text, ["lonely", "sad", "worried", "stress", "stressed"]) else "emotional_social")
         signals.extend([term for term in emotional_terms if term in text][:5])
+    # Action rules route drafting/checklist requests to the action agent.
     if _contains(text, action_terms):
         activated.append("action_agent")
         topics.append("action")
         signals.extend([term for term in action_terms if term in text][:5])
+    # Default to daily-care support for ordinary messages.
     if not activated:
         activated = ["health_daily_care_agent"]
         topics = ["general_daily_life"]
 
+    # Risk is intentionally simple and explainable for the local router.
     high_risk = _contains(text, ["chest pain", "can't breathe", "fainted", "send money", "password", "otp", "fell"])
     medium_risk = _contains(text, ["dizzy", "medicine", "medication", "email", "link", "money", "hungry"])
     router_decision = {
@@ -524,10 +569,12 @@ def rule_router_node(state: ElderGuardState) -> ElderGuardState:
     return _trace(state, "router", router_decision=router_decision)
 
 
+# Read the feature flag that enables the optional ML router.
 def ml_router_is_enabled() -> bool:
     return os.getenv("USE_ML_ROUTER", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Map graph route names to general topic labels.
 GRAPH_ROUTE_TO_TOPIC = {
     "safety_agent": "safety",
     "health_daily_care_agent": "health_daily_care",
@@ -544,6 +591,7 @@ def _update_router_state(
     Update router_decision and keep the router trace consistent.
     """
 
+    # Replace router_decision in state without disturbing earlier node outputs.
     updated_state: ElderGuardState = {
         **rule_state,
         "router_decision": router_decision,
@@ -556,6 +604,7 @@ def _update_router_state(
         )
     )
 
+    # Patch the latest trace span so it matches the final router choice.
     if trace:
         latest_trace = trace[-1]
 
@@ -622,6 +671,7 @@ def _update_router_state(
     return updated_state
 
 
+# Attach the human-readable and structured XAI routing explanation.
 def _attach_xai_decision(
     router_decision: dict[str, Any],
     *,
@@ -636,8 +686,10 @@ def _attach_xai_decision(
     Attach a structured explanation to router_decision.
     """
 
+    # Use an empty object when the ML router did not run.
     ml_data = ml_explanation or {}
 
+    # Store all routing candidates and explanation terms under one xai key.
     router_decision["xai"] = {
         "rule_candidate": rule_route,
         "ml_candidate": str(
@@ -695,6 +747,9 @@ def _attach_xai_decision(
     }
 
     return router_decision
+
+
+# Hybrid router that combines safety rules with optional ML predictions.
 def router_node(
     state: ElderGuardState,
 ) -> ElderGuardState:
@@ -711,6 +766,7 @@ def router_node(
     """
 
     # Vietnamese note: Rule-based override uu tien khi co rui ro cao hoac nhieu intent.
+    # Always run the rule router first so safety evidence is available.
     rule_state = rule_router_node(
         state
     )
@@ -757,6 +813,7 @@ def router_node(
         )
     )
 
+    # If ML is disabled, keep rule routing and attach an XAI explanation.
     if not ml_router_is_enabled():
         router_decision[
             "router_source"
@@ -787,6 +844,7 @@ def router_node(
             router_decision,
         )
 
+    # Try ML routing only after rule evidence has been collected.
     try:
         user_text = (
             extract_latest_user_text(
@@ -810,6 +868,7 @@ def router_node(
             "ml_candidate"
         ] = ml_route
 
+        # Rules win when safety, action, or multi-agent evidence is present.
         must_keep_rules = (
             priority == "high"
             or "action_agent"
@@ -864,6 +923,7 @@ def router_node(
                 router_decision,
             )
 
+        # Clear rule evidence wins over a conflicting ML-only route.
         rule_has_clear_evidence = (
             bool(detected_signals)
             and active_topic
@@ -921,6 +981,7 @@ def router_node(
                 router_decision,
             )
 
+        # Low-risk single-intent messages can use the ML-selected route.
         router_decision[
             "selected_agent"
         ] = ml_route
@@ -959,6 +1020,7 @@ def router_node(
                 "the specialist."
             )
 
+        # Store the final ML or ML-confirmed explanation.
         router_decision[
             "router_source"
         ] = router_source
@@ -992,6 +1054,7 @@ def router_node(
         )
 
     except Exception as error:
+        # Any ML failure falls back to the already-computed rule route.
         router_source = (
             "rules_fallback"
         )
@@ -1034,6 +1097,7 @@ def router_node(
             router_decision,
         )
 
+# Build a normalized specialist evidence object.
 def _agent_result(agent: str, risk: str, signals: list[str], actions: list[str], avoid: list[str], missing: list[str]) -> dict[str, Any]:
     return {
         "agent": agent,
@@ -1047,6 +1111,7 @@ def _agent_result(agent: str, risk: str, signals: list[str], actions: list[str],
     }
 
 
+# Create structured evidence for each broad specialist selected by the router.
 def broad_agent_reasoning_node(state: ElderGuardState) -> ElderGuardState:
     # Vietnamese note: Specialist reasoning chi tao bang chung co cau truc, khong noi truc tiep voi user.
     message = state["request"].message
@@ -1054,6 +1119,7 @@ def broad_agent_reasoning_node(state: ElderGuardState) -> ElderGuardState:
     router = state["router_decision"]
     outputs: dict[str, dict[str, Any]] = {}
 
+    # Safety evidence focuses on fraud, scams, and emergency risks.
     if "safety_agent" in router["activated_agents"]:
         risk = "high" if _contains(text, ["password", "otp", "send money", "transfer", "chest pain", "can't breathe", "fell"]) else "medium"
         outputs["safety_agent"] = _agent_result(
@@ -1064,6 +1130,7 @@ def broad_agent_reasoning_node(state: ElderGuardState) -> ElderGuardState:
             ["do not click unknown links", "do not share passwords or OTPs", "do not send money under pressure"],
             ["who sent the message", "whether the request was expected"],
         )
+    # Health and daily-care evidence covers symptoms, food, and medication.
     if "health_daily_care_agent" in router["activated_agents"]:
         risk = "medium" if _contains(text, ["dizzy", "medicine", "medication", "fell", "pain"]) else "low"
         outputs["health_daily_care_agent"] = _agent_result(
@@ -1074,6 +1141,7 @@ def broad_agent_reasoning_node(state: ElderGuardState) -> ElderGuardState:
             ["do not diagnose", "do not prescribe", "do not change medication dosage"],
             ["exact timing or available items if needed"],
         )
+    # Emotional evidence keeps support gentle and scoped.
     if "emotional_social_agent" in router["activated_agents"]:
         outputs["emotional_social_agent"] = _agent_result(
             "emotional_social_agent",
@@ -1083,6 +1151,7 @@ def broad_agent_reasoning_node(state: ElderGuardState) -> ElderGuardState:
             ["do not pretend to be a therapist", "do not give unrelated safety warnings"],
             ["whether the user wants help contacting someone"],
         )
+    # Action evidence tells the response node to fulfill clear requests.
     if "action_agent" in router["activated_agents"]:
         outputs["action_agent"] = _agent_result(
             "action_agent",
@@ -1095,15 +1164,18 @@ def broad_agent_reasoning_node(state: ElderGuardState) -> ElderGuardState:
     return _trace(state, "broad_agent_reasoning", broad_agent_outputs=outputs)
 
 
+# Prepare an alert decision from the latest user message.
 def alert_decision_node(state: ElderGuardState) -> ElderGuardState:
     # Vietnamese note: Alert decision chi chuan bi canh bao; prototype khong gui thong bao that.
     return _trace(state, "alert_decision", alert_decision=evaluate_alert_decision(state["request"].message))
 
 
+# Generate a deterministic response when the app runs without a live LLM.
 def _mock_conversation_reply(state: ElderGuardState) -> dict[str, Any]:
     message = state["request"].message
     text = message.lower()
     alert = state.get("alert_decision", {})
+    # Alert-required messages get the safest response branch first.
     if alert.get("alert_required"):
         if alert.get("alert_type") == "health" and "dizzy" in text:
             final = "Please sit or lie down now. Since you feel dizzy after standing, I recommend asking someone nearby to check on you. If you have chest pain, trouble breathing, fainting, confusion, or you fall, call emergency services."
@@ -1136,6 +1208,7 @@ def _mock_conversation_reply(state: ElderGuardState) -> dict[str, Any]:
     }
 
 
+# Generate the final natural-language answer using mock or live LLM mode.
 def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
     # Vietnamese note: Conversation agent la noi duy nhat viet phan hoi tu nhien cho nguoi dung.
     settings = get_settings()
@@ -1147,12 +1220,14 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
     prompt_version = "v2"
     coordinated: dict[str, Any]
 
+    # Mock mode keeps local tests deterministic and avoids network calls.
     if settings.llm_mode == "mock":
         coordinated = _mock_conversation_reply(state)
         coordinated["prompt_name"] = prompt_name
         coordinated["prompt_version"] = prompt_version
         coordinated["raw_llm_output"] = ""
     else:
+        # The system prompt constrains the LLM to one safe JSON response.
         system = (
             "You are ElderGuard AI, one warm care companion. "
             f"You are responding as the selected specialist: {selected_agent}. "
@@ -1163,6 +1238,7 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
             "Ask at most one useful follow-up question. "
             "Return only JSON with final_message, xai_simple, follow_up_questions."
         )
+        # The user payload gives the model structured evidence instead of raw internals.
         user_payload = {
             "current_message": state["request"].message,
             "recent_history": memory_context.get("recent_history", [])[-6:],
@@ -1181,6 +1257,7 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
             ),
         }
         try:
+            # This is the only live LLM call path for the conversation response.
             raw = call_openrouter_llm(
                 [
                     {"role": "system", "content": system},
@@ -1189,6 +1266,7 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
                 temperature=0.4,
             )
             data = _json_from_text(raw)
+            # Keep only the JSON fields the rest of the graph expects.
             coordinated = {
                 "final_message": str(data.get("final_message", "")).strip(),
                 "xai_simple": str(data.get("xai_simple", "")).strip(),
@@ -1202,6 +1280,7 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
             if not coordinated["final_message"]:
                 raise RuntimeError(f"Conversation Agent returned empty final_message. Raw output: {raw[:1000]}")
         except Exception as exc:
+            # Save full provider errors locally but return only safe details.
             local_error = {
                 "error_type": type(exc).__name__,
                 "raw_error": str(exc),
@@ -1233,6 +1312,7 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
                 "prompt_version": prompt_version,
             }
 
+    # Attach runtime metadata for the technical trace.
     coordinated["llm_calls_this_turn"] = get_llm_call_counter()
     coordinated["llm_provider"] = settings.llm_provider
     coordinated["llm_model"] = settings.active_llm_model
@@ -1241,6 +1321,7 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
     return _trace(state, "conversation_agent", coordinated=coordinated)
 
 
+# Parse JSON even if a model wraps it with extra text.
 def _json_from_text(text: str) -> dict[str, Any]:
     try:
         return json.loads(text)
@@ -1252,10 +1333,12 @@ def _json_from_text(text: str) -> dict[str, Any]:
         return json.loads(text[start : end + 1])
 
 
+# Convert the coordinated answer into a ChatResponse after safety checks.
 def guardrails_node(state: ElderGuardState) -> ElderGuardState:
     # Vietnamese note: Guardrails kiem tra phan hoi cuoi truoc khi luu memory va tra ve UI.
     coordinated = dict(state["coordinated"])
     response_before_guardrail = str(coordinated.get("final_message", ""))
+    # Run output guardrails before the response is exposed or saved.
     guardrail_result = apply_output_guardrails(
         response_before_guardrail,
         alert_decision=state.get("alert_decision", {}),
@@ -1264,6 +1347,7 @@ def guardrails_node(state: ElderGuardState) -> ElderGuardState:
     final = str(guardrail_result["final_message"])
     issues: list[str] = list(guardrail_result["guardrail_issues"])
     llm_calls = int(coordinated.get("llm_calls_this_turn", get_llm_call_counter()) or 0)
+    # Enforce the one-call-per-turn budget in the trace.
     if llm_calls > 1:
         issues.append("llm_call_budget_exceeded")
     response_after_guardrail = final
@@ -1273,6 +1357,7 @@ def guardrails_node(state: ElderGuardState) -> ElderGuardState:
     coordinated["final_message"] = final
     coordinated["final_message_source"] = final_message_source
 
+    # Combine broad-agent risks with router priority.
     risks = [output.get("risk", "low") for output in state.get("broad_agent_outputs", {}).values()]
     overall_risk = _risk_max(*risks, state.get("router_decision", {}).get("priority", "low"))
     care_plan = {
@@ -1281,6 +1366,7 @@ def guardrails_node(state: ElderGuardState) -> ElderGuardState:
         "alert_decision": state.get("alert_decision", {}),
         "guardrail_issues": issues,
     }
+    # Developer state is verbose because it powers trace and family views.
     developer_state = {
         "llm_provider": coordinated.get("llm_provider", ""),
         "llm_model": coordinated.get("llm_model", ""),
@@ -1306,6 +1392,7 @@ def guardrails_node(state: ElderGuardState) -> ElderGuardState:
         "memory_policy": "Facts are classified before durable save. Only confirmed profile facts are treated as truth.",
         "guardrails": {"passed": not issues, "issues": issues},
     }
+    # Build the public response model expected by API and Streamlit callers.
     response = ChatResponse(
         final_message=final,
         active_mode=coordinated.get("active_mode", "Mock"),
@@ -1350,6 +1437,7 @@ def guardrails_node(state: ElderGuardState) -> ElderGuardState:
         care_plan=care_plan,
         developer_state=developer_state,
     )
+    # Keep raw workflow details for persistence and trace artifacts.
     raw_json = {
         "memory_context": state.get("memory_context", {}),
         "router_decision": state.get("router_decision", {}),
@@ -1366,11 +1454,13 @@ def guardrails_node(state: ElderGuardState) -> ElderGuardState:
     return _trace(state, "guardrails", final_response=response, raw_json=raw_json)
 
 
+# Persist messages, classified memories, logs, and trace data.
 def save_memory_node(state: ElderGuardState) -> ElderGuardState:
     # Vietnamese note: Save memory phan loai thong tin truoc khi luu vao SQLite va technical trace.
     request = state["request"]
     response = state["final_response"]
     llm_error = response.developer_state.get("llm_error", {})
+    # Classify the user message before saving anything durable.
     classified_memories = classify_memory(
         request.message,
         final_message_source=response.final_message_source,
@@ -1378,10 +1468,12 @@ def save_memory_node(state: ElderGuardState) -> ElderGuardState:
         router_decision=state.get("router_decision", {}),
         alert_decision=state.get("alert_decision", {}),
     )
+    # Always save the user message, but skip assistant text on LLM errors.
     save_message(request.user_id, request.conversation_id, "user", request.message)
     if not llm_error:
         save_message(request.user_id, request.conversation_id, "assistant", response.final_message)
 
+    # Save only memory items that the classifier allows.
     for memory in classified_memories:
         if memory.get("memory_type") == "do_not_save":
             continue
@@ -1397,6 +1489,7 @@ def save_memory_node(state: ElderGuardState) -> ElderGuardState:
             },
         )
 
+    # Confirmed long-term memories update the durable user profile.
     profile_updates = profile_updates_from_memories(classified_memories)
     if profile_updates and not llm_error:
         profile = get_user_profile(request.user_id)
@@ -1405,12 +1498,14 @@ def save_memory_node(state: ElderGuardState) -> ElderGuardState:
             profile[key].extend(values)
         save_user_profile(request.user_id, profile)
 
+    # Write trace artifacts and the admin interaction log.
     raw_json = {**state.get("raw_json", {}), "langgraph_trace": state.get("langgraph_trace", [])}
     raw_json["classified_memories"] = classified_memories
     _write_trace_artifact(request, raw_json)
     response.memory_id = save_interaction(request, response, raw_json)
     response.developer_state["classified_memories"] = classified_memories
     if not llm_error:
+        # Update the compact text summary with confirmed durable facts.
         summary_items = [
             f"{item['memory_type']}: {item['content']}"
             for item in classified_memories
@@ -1419,12 +1514,14 @@ def save_memory_node(state: ElderGuardState) -> ElderGuardState:
         if summary_items:
             update_user_summary(request.user_id, " ".join(summary_items)[:500])
     final_state = _trace(state, "save_memory", final_response=response)
+    # Attach final trace and memory status back onto the response.
     response.developer_state["langgraph_trace"] = final_state.get("langgraph_trace", [])
     response.developer_state["trace"] = _normalized_trace(final_state)
     response.developer_state["memory_saved"] = True
     return final_state
 
 
+# Write the latest trace to data/traces for local debugging.
 def _write_trace_artifact(request: ChatRequest, raw_json: dict[str, Any]) -> None:
     # Vietnamese note: Technical trace giup developer giai thich workflow, khong hien o elder view.
     trace_dir = Path("data/traces")
@@ -1432,6 +1529,7 @@ def _write_trace_artifact(request: ChatRequest, raw_json: dict[str, Any]) -> Non
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     safe_user = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in request.user_id)
     safe_conversation = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in request.conversation_id)
+    # Store both a timestamped file and last_trace.json for quick inspection.
     payload = {
         "timestamp": stamp,
         "user_id": request.user_id,
@@ -1444,8 +1542,10 @@ def _write_trace_artifact(request: ChatRequest, raw_json: dict[str, Any]) -> Non
     (trace_dir / "last_trace.json").write_text(text, encoding="utf-8")
 
 
+# Build and compile the LangGraph workflow.
 def build_graph():
     graph = StateGraph(ElderGuardState)
+    # Register each node by the name used in the trace.
     graph.add_node("memory_context_builder", memory_context_builder_node)
     graph.add_node("router", router_node)
     graph.add_node("broad_agent_reasoning", broad_agent_reasoning_node)
@@ -1454,6 +1554,7 @@ def build_graph():
     graph.add_node("guardrails", guardrails_node)
     graph.add_node("save_memory", save_memory_node)
 
+    # Wire the graph in the fixed workflow order.
     graph.set_entry_point("memory_context_builder")
     graph.add_edge("memory_context_builder", "router")
     graph.add_edge("router", "broad_agent_reasoning")
@@ -1465,12 +1566,16 @@ def build_graph():
     return graph.compile()
 
 
+# Compile once at import time so requests can invoke the graph quickly.
 elderguard_graph = build_graph()
 
 
+# Run one ElderGuard workflow turn and return the final response.
 def run_elderguard_workflow(request: ChatRequest) -> ChatResponse:
+    # Reset per-turn LLM accounting before the graph starts.
     reset_llm_call_counter()
     try:
+        # Seed trace timing fields and invoke the compiled graph.
         start = time.perf_counter()
         result = elderguard_graph.invoke(
             {
@@ -1484,6 +1589,7 @@ def run_elderguard_workflow(request: ChatRequest) -> ChatResponse:
         )
         return result["final_response"]
     except Exception as exc:
+        # If the graph itself fails, return a safe response and log details locally.
         try:
             settings = get_settings()
             llm_mode = settings.llm_mode
@@ -1495,6 +1601,7 @@ def run_elderguard_workflow(request: ChatRequest) -> ChatResponse:
             llm_model = "unknown"
         text = request.message.lower()
         emergency_hint = ""
+        # Preserve emergency guidance even during backend failures.
         if any(term in text for term in ["chest pain", "can't breathe", "trouble breathing", "fainted", "confusion", "hurt myself", "kill myself"]):
             emergency_hint = " If this may be urgent, please contact emergency services or a trusted nearby person now."
         local_error = {
@@ -1510,6 +1617,7 @@ def run_elderguard_workflow(request: ChatRequest) -> ChatResponse:
         }
         Path("data").mkdir(exist_ok=True)
         Path("data/last_chat_error.txt").write_text(json.dumps(local_error, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Return a full ChatResponse so callers do not need a separate error shape.
         return ChatResponse(
             final_message=f"ElderGuard is having a service problem right now. Please try again in a moment.{emergency_hint}",
             active_mode="Error",

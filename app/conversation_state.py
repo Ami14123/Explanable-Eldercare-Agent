@@ -3,6 +3,9 @@
 import re
 from typing import Any
 
+# Conversation-state helpers track topics, follow-ups, and missing facts.
+
+# Default state used when a conversation has no saved memory yet.
 DEFAULT_CONVERSATION_STATE: dict[str, Any] = {
     "active_topic": "general_chat",
     "topic_status": "active",
@@ -18,6 +21,7 @@ DEFAULT_CONVERSATION_STATE: dict[str, Any] = {
     "last_assistant_intent": "",
 }
 
+# Topic definitions connect keyword detection to goals and specialist agents.
 TOPIC_DEFINITIONS: dict[str, dict[str, Any]] = {
     "fraud_safety": {
         "terms": ["email", "emailed", "link", "click", "login", "log in", "sign in", "password", "bank", "otp", "transfer", "send money", "lend money", "gift card", "crypto", "police", "download", "account"],
@@ -57,6 +61,7 @@ TOPIC_DEFINITIONS: dict[str, dict[str, Any]] = {
     "general_chat": {"terms": [], "agents": [], "goal": "answer the user naturally"},
 }
 
+# Action patterns detect when the user asks for a draft, checklist, or script.
 ACTION_PATTERNS: dict[str, list[str]] = {
     "message_draft": ["write a message", "draft a text", "write text", "message for", "message to", "send message", "help me write", "text my", "write my", "a message for"],
     "checklist": ["checklist", "list of steps", "steps to"],
@@ -64,14 +69,18 @@ ACTION_PATTERNS: dict[str, list[str]] = {
     "caregiver_summary": ["summary for caregiver", "tell my caregiver", "caregiver summary"],
 }
 
+# Short yes/no vocabularies help interpret replies to pending questions.
 YES_WORDS = {"yes", "yeah", "yep", "ok", "okay", "sure", "please", "yes please"}
 NO_WORDS = {"no", "nope", "not", "don't", "do not"}
 
 
+# Fill missing keys and normalize saved state into the expected shape.
 def normalize_state(state: dict[str, Any] | None) -> dict[str, Any]:
     normalized = dict(DEFAULT_CONVERSATION_STATE)
+    # Overlay saved state while keeping defaults for any new keys.
     if state:
         normalized.update(state)
+    # Copy mutable fields so callers do not mutate default objects.
     normalized["known_facts"] = dict(normalized.get("known_facts") or {})
     normalized["missing_facts"] = list(normalized.get("missing_facts") or [])
     normalized["impossible_actions"] = list(normalized.get("impossible_actions") or [])
@@ -82,6 +91,7 @@ def normalize_state(state: dict[str, Any] | None) -> dict[str, Any]:
     return normalized
 
 
+# Match phrases by substring and single terms by word boundary.
 def _term_match(text: str, term: str) -> bool:
     term = term.lower()
     if " " in term:
@@ -89,11 +99,14 @@ def _term_match(text: str, term: str) -> bool:
     return re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text) is not None
 
 
+# Detect the most likely active topic from the latest message.
 def detect_topic(message: str) -> str:
     text = message.lower()
+    # Fraud is checked first because it has higher safety risk.
     if _has_fraud_signal(text):
         return "fraud_safety"
     scored: list[tuple[int, str]] = []
+    # Score topics by how many of their terms appear.
     for topic, data in TOPIC_DEFINITIONS.items():
         if topic == "general_chat":
             continue
@@ -107,6 +120,7 @@ def detect_topic(message: str) -> str:
     return scored[0][1]
 
 
+# Detect whether the user requested a concrete helper action.
 def detect_action_request(message: str) -> str:
     text = message.lower()
     for action, terms in ACTION_PATTERNS.items():
@@ -115,11 +129,14 @@ def detect_action_request(message: str) -> str:
     return ""
 
 
+# Classify only the newest user message for routing and explanation.
 def classify_latest_user_intent(message: str, detected_topic: str = "") -> str:
     """Classify the latest user message without letting old topic memory dominate."""
     text = message.lower()
+    # Action requests override topic labels because they change the response form.
     if detect_action_request(message):
         return detect_action_request(message)
+    # Specific safety and care patterns get readable intent names.
     if any(term in text for term in ["email", "emailed", "link", "click", "unknown sender", "don't know them", "do not know them"]):
         return "suspicious_email"
     if any(term in text for term in ["otp", "bank", "password", "transfer", "send money", "lend money", "gift card", "crypto", "police"]):
@@ -140,22 +157,27 @@ def classify_latest_user_intent(message: str, detected_topic: str = "") -> str:
     return "general_chat"
 
 
+# Detect an affirmative answer to a pending question or action.
 def _is_yes(text: str) -> bool:
     cleaned = text.strip().lower().strip(" .,!?")
     return cleaned in YES_WORDS or cleaned.startswith("yes,") or cleaned.startswith("yes ")
 
 
+# Detect a negative answer to a pending question or action.
 def _is_no(text: str) -> bool:
     cleaned = text.strip().lower().strip(" .,!?")
     return cleaned in NO_WORDS or cleaned.startswith("no,") or cleaned.startswith("no ")
 
 
+# Detect corrections so the state can replace assumptions.
 def _is_correction(text: str) -> bool:
     return any(text.startswith(prefix) for prefix in ["no,", "no ", "actually", "i mean", "not that", "but "])
 
 
 
+# Detect fraud terms with a broader check than ordinary topic scoring.
 def _has_fraud_signal(text: str) -> bool:
+    # Explicit terms catch common suspicious message phrasing.
     explicit_terms = [
         "email",
         "emailed",
@@ -170,8 +192,10 @@ def _has_fraud_signal(text: str) -> bool:
         _term_match(text, term) for term in TOPIC_DEFINITIONS["fraud_safety"]["terms"]
     )
 
+# Decide how the latest message changes the active conversation state.
 def classify_transition(message: str, state: dict[str, Any]) -> dict[str, Any]:
     state = normalize_state(state)
+    # Read current state fields once so branch conditions stay clear.
     text = message.lower().strip()
     detected_topic = detect_topic(message)
     requested_action = detect_action_request(message)
@@ -179,9 +203,11 @@ def classify_transition(message: str, state: dict[str, Any]) -> dict[str, Any]:
     pending_question = state.get("pending_question", "")
     pending_action = state.get("pending_action", "")
 
+    # Concrete action requests create an action branch.
     if requested_action:
         transition = "request_action"
     elif pending_question and _is_correction(text) and any(term in text for term in ["have", "is", "it", "they"]):
+        # Corrections can still answer the question that is currently pending.
         transition = "answer_pending_question"
     elif _is_correction(text):
         transition = "correct_previous_assumption"
@@ -222,6 +248,7 @@ def classify_transition(message: str, state: dict[str, Any]) -> dict[str, Any]:
     else:
         transition = "casual_chat" if current_topic == "general_chat" else "continue_current_topic"
 
+    # Preserve the latest intent so downstream nodes can explain their routing.
     latest_user_intent = classify_latest_user_intent(message, detected_topic)
     return {
         "transition": transition,
@@ -233,7 +260,9 @@ def classify_transition(message: str, state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Build a compact intent label for logs and state.
 def _intent_label(message: str, action: str, topic: str, state: dict[str, Any]) -> str:
+    # Requested actions are the clearest intent when present.
     if action:
         return action
     text = message.lower()
@@ -246,12 +275,15 @@ def _intent_label(message: str, action: str, topic: str, state: dict[str, Any]) 
     return topic
 
 
+# Update the saved conversation state after one user turn.
 def update_conversation_state(previous_state: dict[str, Any] | None, message: str, transition: dict[str, Any], assistant_message: str = "") -> dict[str, Any]:
     state = normalize_state(previous_state)
+    # Pull transition outputs into local names for branch updates.
     detected_topic = transition.get("detected_topic") or "general_chat"
     transition_name = transition.get("transition", "casual_chat")
     requested_action = transition.get("requested_action", "")
 
+    # A new topic resets known facts and pending questions.
     if transition_name == "start_new_topic":
         state["active_topic"] = detected_topic
         state["topic_status"] = "replaced"
@@ -272,14 +304,17 @@ def update_conversation_state(previous_state: dict[str, Any] | None, message: st
     state["user_goal"] = TOPIC_DEFINITIONS.get(topic, TOPIC_DEFINITIONS["general_chat"])["goal"]
     state["last_user_intent"] = transition.get("message_intent", "")
 
+    # Merge facts before recomputing missing information.
     _merge_known_facts(state, message, transition)
 
+    # Remember rejected actions so the assistant does not repeat them.
     if transition_name == "reject_action":
         rejected = state.get("pending_action") or state.get("last_assistant_intent") or "previous suggestion"
         if rejected not in state["impossible_actions"]:
             state["impossible_actions"].append(rejected)
 
     # If the user confirms an action and provides recipient details, keep the action request.
+    # Maintain pending action only while the user is asking or confirming it.
     if requested_action:
         state["pending_action"] = requested_action
     elif transition_name == "confirm_action" and state.get("pending_action"):
@@ -292,19 +327,23 @@ def update_conversation_state(previous_state: dict[str, Any] | None, message: st
     state["missing_facts"] = _missing_facts_for_topic(topic, state["known_facts"], state.get("pending_action", ""))
     state["pending_question"] = _next_pending_question(topic, state["missing_facts"], state.get("pending_action", ""))
     state["pending_answer_type"] = _answer_type_for_question(state["pending_question"])
+    # Store a short copy of the assistant answer for future context.
     if assistant_message:
         state["last_recommendation"] = assistant_message[:500]
     return state
 
 
+# Extract structured known facts from the latest message.
 def _merge_known_facts(state: dict[str, Any], message: str, transition: dict[str, Any]) -> None:
     facts = state.setdefault("known_facts", {})
     text = message.lower().strip()
     topic = state.get("active_topic", "general_chat")
     transition_name = transition.get("transition", "")
+    # Pending-question answers are stored under the expected answer type.
     if transition_name == "answer_pending_question" and state.get("pending_answer_type"):
         facts[state["pending_answer_type"]] = _normalize_pending_answer(state["pending_answer_type"], message)
 
+    # Fraud facts track sender identity and risky requested actions.
     if topic == "fraud_safety":
         if "email" in text or "emailed" in text or "link" in text or "click" in text:
             facts.setdefault("channel", "email/link")
@@ -322,6 +361,7 @@ def _merge_known_facts(state: dict[str, Any], message: str, transition: dict[str
             facts["asks_for_download"] = True
         if any(t in text for t in ["urgent", "every minute", "lose money", "waiting"]):
             facts["urgency_pressure"] = True
+    # Food facts track whether the user has food, drink, or a helper.
     elif topic == "food_support":
         if "hungry" in text:
             facts["hungry"] = True
@@ -343,16 +383,19 @@ def _merge_known_facts(state: dict[str, Any], message: str, transition: dict[str
             facts["recipient"] = "daughter"
         if any(t in text for t in ["buy food", "groceries", "buy"]):
             facts["needed_item"] = "food/groceries"
+    # Medication facts keep the details because dosage advice must stay cautious.
     elif topic == "medication_support":
         if "forgot" in text or "missed" in text:
             facts["missed_or_unsure"] = True
         facts.setdefault("details", message.strip())
+    # Health facts collect symptoms for risk and follow-up questions.
     elif topic == "health_support":
         for symptom in ["dizzy", "weak", "pain", "chest pain", "breathing", "fall", "fell", "fever"]:
             if symptom in text:
                 facts.setdefault("symptoms", [])
                 if symptom not in facts["symptoms"]:
                     facts["symptoms"].append(symptom)
+    # Emotional and caregiver facts are simple free-text details.
     elif topic == "emotional_support":
         facts["emotion_detail"] = message.strip()
     elif topic == "caregiver_coordination":
@@ -360,9 +403,12 @@ def _merge_known_facts(state: dict[str, Any], message: str, transition: dict[str
             facts["recipient"] = "daughter"
 
 
+# Decide which facts are still needed for the active topic.
 def _missing_facts_for_topic(topic: str, facts: dict[str, Any], action: str = "") -> list[str]:
+    # Drafting can often proceed once the recipient is known.
     if action == "message_draft":
         return [] if facts.get("recipient") or topic == "food_support" else ["who should receive the message"]
+    # Fraud checks need sender identity and requested action details.
     if topic == "fraud_safety":
         missing = []
         if not facts.get("sender_identity") or facts.get("sender_identity") == "unknown":
@@ -370,6 +416,7 @@ def _missing_facts_for_topic(topic: str, facts: dict[str, Any], action: str = ""
         if not (facts.get("asks_for_login") or facts.get("asks_for_money") or facts.get("asks_for_download")):
             missing.append("whether the message asks for login, money, download, or private information")
         return missing
+    # Food support needs different facts depending on whether food is available.
     if topic == "food_support":
         if facts.get("food_available") == "none in fridge":
             return ["who can help buy or bring food"] if not facts.get("recipient") else []
@@ -383,7 +430,9 @@ def _missing_facts_for_topic(topic: str, facts: dict[str, Any], action: str = ""
     return []
 
 
+# Choose the next focused question from the missing facts.
 def _next_pending_question(topic: str, missing: list[str], action: str = "") -> str:
+    # If drafting is requested, avoid blocking on extra questions.
     if action == "message_draft":
         return ""
     if not missing:
@@ -403,6 +452,7 @@ def _next_pending_question(topic: str, missing: list[str], action: str = "") -> 
     return "Can you tell me one more detail?"
 
 
+# Convert a pending question into the fact key expected by the next answer.
 def _answer_type_for_question(question: str) -> str:
     q = question.lower()
     if "who sent" in q:
@@ -419,24 +469,32 @@ def _answer_type_for_question(question: str) -> str:
 
 
 
+# Normalize the answer to a pending question before saving it as a fact.
 def _normalize_pending_answer(answer_type: str, message: str) -> Any:
     cleaned = message.strip().strip(" .''\"")
     lowered = cleaned.lower()
+    # Unknown senders get a canonical value for fraud checks.
     if answer_type == "sender_identity":
         if any(term in lowered for term in ["don't know", "dont know", "do not know", "unknown", "not sure", "someone"]):
             return "unknown"
         return cleaned
     return cleaned
+
+
+# Return the specialist agents associated with a topic.
 def agents_for_topic(topic: str) -> list[str]:
     return list(TOPIC_DEFINITIONS.get(topic, TOPIC_DEFINITIONS["general_chat"])["agents"])
 
 
+# Fulfill a concrete requested action using known facts and the latest message.
 def fulfill_requested_action(action: str, state: dict[str, Any], message: str) -> dict[str, Any]:
+    # Empty action means there is nothing to fulfill.
     if not action:
         return {}
     facts = state.get("known_facts", {})
     topic = state.get("active_topic", "general_chat")
     recipient = facts.get("recipient") or _recipient_from_text(message) or "someone you trust"
+    # Draft messages are tailored to the current topic but remain local text only.
     if action == "message_draft":
         if topic == "food_support":
             content = (
@@ -458,19 +516,17 @@ def fulfill_requested_action(action: str, state: dict[str, Any], message: str) -
         content = f"Caregiver summary: topic={topic}; known facts={facts}; goal={state.get('user_goal', '')}."
     else:
         content = "I can help with that. Please tell me what you want the message to say."
+    # Return structured action data so the graph can include it in the response.
     return {"action_type": action, "content": content, "topic": topic, "should_fulfill_now": True}
 
 
+# Pull a likely recipient name from the user's message.
 def _recipient_from_text(message: str) -> str:
     text = message.lower()
     for person in ["daughter", "son", "caregiver", "neighbor", "friend", "family"]:
         if person in text:
             return person
     return ""
-
-
-
-
 
 
 

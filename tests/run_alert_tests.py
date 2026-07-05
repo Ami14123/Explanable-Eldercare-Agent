@@ -1,5 +1,7 @@
+# Alert-policy regression tests for high-risk and caregiver-contact cases.
 import os
 
+# Force deterministic local responses for alert tests.
 os.environ["LLM_MODE"] = "mock"
 
 from app.config import get_settings
@@ -8,6 +10,7 @@ from app.graph import run_elderguard_workflow
 from app.schemas import ChatRequest
 
 
+# Run one workflow turn and check the prepared alert fields.
 def check(
     message: str,
     expected_required: bool,
@@ -23,6 +26,7 @@ def check(
             conversation_id=message[:24].replace(" ", "_"),
         )
     )
+    # Alerts may appear in developer_state or care_plan depending on response shape.
     alert = response.developer_state.get("alert_decision") or response.care_plan.get("alert_decision", {})
     actual = (
         bool(alert.get("alert_required")),
@@ -32,6 +36,7 @@ def check(
     expected = (expected_required, expected_type, expected_level)
     if actual != expected:
         raise AssertionError(f"{message!r}: expected {expected}, got {actual}. Alert={alert}")
+    # User-requested contact should be recorded without extra confirmation.
     if expected_requested_contact is not None and bool(alert.get("user_requested_contact")) != expected_requested_contact:
         raise AssertionError(f"{message!r}: expected user_requested_contact={expected_requested_contact}, got {alert}")
     if expected_requested_contact is True and bool(alert.get("human_confirmation_required")) is not False:
@@ -39,9 +44,12 @@ def check(
     print(f"PASS: {message} -> {alert}")
 
 
+# Execute all alert cases as a standalone script.
 def main() -> None:
+    # Reset cached settings and ensure database tables exist.
     get_settings.cache_clear()
     init_db()
+    # Each check covers one alert rule or non-alert control case.
     check("Someone emailed me a link asking me to send money", True, "fraud", "medium")
     check("I ate expired food and now my stomach hurts", True, "health", "medium")
     check("I feel dizzy after standing up", False, "none", "low")
@@ -56,5 +64,6 @@ def main() -> None:
     print("All alert tests passed.")
 
 
+# Allow direct command-line execution.
 if __name__ == "__main__":
     main()

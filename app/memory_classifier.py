@@ -1,8 +1,10 @@
+# Rule-based memory classifier for deciding what should be saved.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+# Memory categories match the persistence policy used by app.memory.
 MemoryType = Literal[
     "working_memory",
     "episodic_memory",
@@ -12,16 +14,19 @@ MemoryType = Literal[
 ]
 
 
+# Check whether any trigger term appears in lowercased text.
 def _contains(text: str, terms: list[str]) -> bool:
     return any(term in text for term in terms)
 
 
+# Convert a TTL into an ISO expiration time for short-lived memories.
 def _expires_at(ttl_minutes: int | None) -> str | None:
     if ttl_minutes is None:
         return None
     return (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat()
 
 
+# Build one normalized memory classification item.
 def _item(
     memory_type: MemoryType,
     content: str,
@@ -32,6 +37,7 @@ def _item(
     reason: str,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Include both TTL minutes and exact expiry so storage can use either.
     return {
         "memory_type": memory_type,
         "content": content,
@@ -44,6 +50,7 @@ def _item(
     }
 
 
+# Classify a message into saveable memory items or explicit do-not-save items.
 def classify_memory(
     message: str,
     *,
@@ -53,9 +60,11 @@ def classify_memory(
     alert_decision: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Classify user information before saving it as memory."""
+    # Normalize optional context so rules can read safely.
     text = message.lower()
     router_decision = router_decision or {}
     alert_decision = alert_decision or {}
+    # Never save turns where the answer came from an error path.
     if llm_error or final_message_source in {"conversation_agent_error", "workflow_error"}:
         return [
             _item(
@@ -70,6 +79,7 @@ def classify_memory(
 
     memories: list[dict[str, Any]] = []
 
+    # Credentials and one-time codes must never become user memory.
     if _contains(text, ["password", "api key", "secret key", "token is", "my otp", "otp is"]):
         memories.append(
             _item(
@@ -83,6 +93,7 @@ def classify_memory(
         )
         return memories
 
+    # Food available right now is useful briefly, but should expire soon.
     available_foods = [
         food
         for food in ["bread", "rice", "soup", "eggs", "egg", "banana", "crackers", "yogurt", "juice", "water", "leftovers"]
@@ -101,6 +112,7 @@ def classify_memory(
             )
         )
 
+    # Current symptoms are temporary context, not durable profile facts.
     symptoms = [term for term in ["dizzy", "dizziness", "weak", "pain", "stomach pain", "nausea", "confusion", "chest pain"] if term in text]
     if symptoms:
         memories.append(
@@ -115,6 +127,7 @@ def classify_memory(
             )
         )
 
+    # Safety, fraud, fall, and medication events are saved as episodic memory.
     incident_terms = ["scam", "email", "link", "fall", "fell", "almost fell", "missed", "forgot", "medication", "medicine", "pill", "dose"]
     if _contains(text, incident_terms):
         memories.append(
@@ -133,6 +146,7 @@ def classify_memory(
             )
         )
 
+    # Confirmed chronic conditions belong in the long-term profile.
     chronic_markers = ["i have diabetes", "i have hypertension", "i have heart disease", "i have asthma", "doctor said i have", "diagnosed with"]
     if _contains(text, chronic_markers):
         memories.append(
@@ -147,6 +161,7 @@ def classify_memory(
             )
         )
 
+    # Confirmed caregiver or family contact details are long-term support facts.
     if _contains(text, ["my caregiver", "my daughter", "my son", "my wife", "my husband", "my neighbor", "my friend"]) and _contains(
         text, ["is", "called", "name", "phone", "contact", "can help", "takes care"]
     ):
@@ -162,6 +177,7 @@ def classify_memory(
             )
         )
 
+    # General care questions are knowledge needs, not personal facts.
     if "what is" in text or "how do i" in text or "is it safe" in text or "good for" in text:
         memories.append(
             _item(
@@ -174,6 +190,7 @@ def classify_memory(
             )
         )
 
+    # Add an explicit no-save item when nothing useful was extracted.
     if not memories:
         memories.append(
             _item(
@@ -188,13 +205,16 @@ def classify_memory(
     return memories
 
 
+# Convert confirmed long-term memories into profile update patches.
 def profile_updates_from_memories(memories: list[dict[str, Any]]) -> dict[str, Any]:
     updates: dict[str, Any] = {}
     for memory in memories:
+        # Only confirmed profile memories should update durable profile sections.
         if memory.get("memory_type") != "long_term_profile" or not memory.get("confirmed"):
             continue
         category = memory.get("metadata", {}).get("profile_category", "general")
         updates.setdefault(category, [])
+        # Store profile facts with metadata needed for audit and display.
         updates[category].append(
             {
                 "content": memory.get("content", ""),

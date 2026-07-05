@@ -1,9 +1,11 @@
+# Mock tool implementations used by specialist agents.
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
 
 
+# Build a safe-route response without calling an external map service.
 def get_safe_route_tool(
     current_location: str,
     destination: str,
@@ -16,12 +18,14 @@ def get_safe_route_tool(
     Google Maps hay dich vu dinh vi that.
     """
 
+    # Collect missing required inputs so the agent can ask a focused question.
     missing = []
     if not current_location.strip():
         missing.append("current_location")
     if not destination.strip():
         missing.append("destination")
 
+    # Return structured fields so downstream UI can show status and safety notes.
     return {
         "tool": "get_safe_route_tool",
         "mode": "mock",
@@ -43,6 +47,7 @@ def get_safe_route_tool(
     }
 
 
+# Prepare alert text but leave real sending to a human-confirmed system.
 def send_caregiver_alert_tool(
     caregiver_name: str,
     message: str,
@@ -50,6 +55,7 @@ def send_caregiver_alert_tool(
 ) -> dict[str, Any]:
     """Prepare a caregiver alert without sending it externally."""
 
+    # Include a timestamp so logs can show when the alert draft was created.
     return {
         "tool": "send_caregiver_alert_tool",
         "mode": "mock",
@@ -63,12 +69,14 @@ def send_caregiver_alert_tool(
     }
 
 
+# Prepare a reminder object without scheduling an external notification.
 def create_reminder_tool(
     reminder_text: str,
     scheduled_for: str = "",
 ) -> dict[str, Any]:
     """Create a mock reminder object without scheduling a real notification."""
 
+    # Empty reminder text means the agent needs more information first.
     return {
         "tool": "create_reminder_tool",
         "mode": "mock",

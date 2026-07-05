@@ -1,7 +1,9 @@
+# End-to-end workflow examples that protect key routing and response behavior.
 from app.graph import run_elderguard_workflow
 from app.schemas import ChatRequest
 
 
+# Single-turn examples check that the right broad agent answers each message.
 TEST_CASES = [
     {
         "name": "3 normal daily life question",
@@ -54,7 +56,9 @@ TEST_CASES = [
 ]
 
 
+# Run all examples directly without requiring pytest.
 def main() -> None:
+    # First pass verifies single-turn routing and response specificity.
     for case in TEST_CASES:
         response = run_elderguard_workflow(
             ChatRequest(message=case["message"], user_id=f"test_{case['name']}")
@@ -76,6 +80,7 @@ def main() -> None:
         for phrase in case.get("must_not_mention", []):
             assert phrase not in text, f"Unrelated phrase found: {phrase}"
 
+    # Follow-up examples verify that memory and topic continuity work.
     follow_up_cases = [
         {
             "name": "1 hunger plus juice follow-up",
@@ -124,6 +129,7 @@ def main() -> None:
         },
     ]
 
+    # Run each follow-up conversation in a separate conversation id.
     for index, case in enumerate(follow_up_cases):
         conversation_id = f"test_followup_{index}"
         response = None
@@ -141,5 +147,6 @@ def main() -> None:
             assert phrase in text, f"Expected follow-up phrase not found: {phrase}"
 
 
+# Allow this file to act as a standalone smoke test script.
 if __name__ == "__main__":
     main()

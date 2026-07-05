@@ -1,3 +1,4 @@
+# UI/privacy tests for sanitized family and technical views.
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,11 +7,13 @@ from app.ui.family_view import build_family_explanation
 from app.ui.sanitization import sanitize_developer_state
 
 
+# Assert helper used by this standalone test script.
 def assert_true(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
 
 
+# Build a representative response payload with secrets and trace data.
 def sample_response() -> dict:
     return {
         "final_message": "Please sit down and ask someone nearby to check on you.",
@@ -57,12 +60,14 @@ def sample_response() -> dict:
     }
 
 
+# Sanitization should redact keys and hidden prompt fields.
 def test_sanitization_removes_secrets() -> None:
     sanitized = sanitize_developer_state(sample_response()["developer_state"])
     assert_true(sanitized["OPENROUTER_API_KEY"] == "[redacted]", "API key should be redacted")
     assert_true(sanitized["system_prompt"] == "[redacted]", "Hidden prompts should be redacted")
 
 
+# Family explanation should keep useful summary fields but hide secrets.
 def test_family_explanation_is_structured_and_safe() -> None:
     explanation = build_family_explanation(
         sample_response(),
@@ -76,6 +81,7 @@ def test_family_explanation_is_structured_and_safe() -> None:
     assert_true("hidden instructions" not in rendered, "Family view should not expose prompts")
 
 
+# Elder-facing Streamlit view should not render developer internals.
 def test_streamlit_elder_view_hides_developer_state() -> None:
     text = Path("streamlit_app.py").read_text(encoding="utf-8")
     elder_function = text.split("def render_elder_view", 1)[1].split("if \"messages\" not in st.session_state", 1)[0]
@@ -84,6 +90,7 @@ def test_streamlit_elder_view_hides_developer_state() -> None:
     assert_true("I'm thinking carefully about how to help..." in text, "Waiting sentence should be present")
 
 
+# Technical trace should preserve execution order and one-call accounting.
 def test_trace_execution_order_and_one_llm_call() -> None:
     trace = sample_response()["developer_state"]["trace"]
     orders = [span["order"] for span in trace["spans"]]
@@ -96,6 +103,7 @@ def test_trace_execution_order_and_one_llm_call() -> None:
     )
 
 
+# UI files should not call the LLM gateway directly.
 def test_ui_does_not_call_llm_directly() -> None:
     files = [
         Path("streamlit_app.py"),
@@ -107,6 +115,7 @@ def test_ui_does_not_call_llm_directly() -> None:
     assert_true("call_openrouter_llm" not in combined, "UI must not call OpenRouter")
 
 
+# Run all UI/privacy checks without pytest.
 if __name__ == "__main__":
     test_sanitization_removes_secrets()
     test_family_explanation_is_structured_and_safe()

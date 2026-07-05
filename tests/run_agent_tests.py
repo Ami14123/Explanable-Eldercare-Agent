@@ -1,3 +1,4 @@
+# HTTP-level agent regression tests for a running FastAPI backend.
 import json
 import sys
 import time
@@ -10,6 +11,7 @@ from typing import Any
 BACKEND_URL = "http://127.0.0.1:8000"
 
 
+# Expected behavior for one conversation turn.
 @dataclass
 class TurnExpectation:
     message: str
@@ -20,12 +22,14 @@ class TurnExpectation:
     expected_topic: str = ""
 
 
+# A scenario groups turns that share user and conversation ids.
 @dataclass
 class TestScenario:
     name: str
     turns: list[TurnExpectation]
 
 
+# Scenario list covers topic switching, follow-ups, and specialist routing.
 SCENARIOS = [
     TestScenario(
         name="Food need switches away from old email topic",
@@ -144,7 +148,9 @@ SCENARIOS = [
 ]
 
 
+# Send one chat request to the local backend.
 def post_chat(message: str, user_id: str, conversation_id: str) -> dict[str, Any]:
+    # Build the JSON payload exactly like a frontend client would.
     payload = {
         "message": message,
         "user_id": user_id,
@@ -161,12 +167,14 @@ def post_chat(message: str, user_id: str, conversation_id: str) -> dict[str, Any
         return json.loads(response.read().decode("utf-8"))
 
 
+# Compare one response against the expected agents, topic, and phrases.
 def check_turn(result: dict[str, Any], expectation: TurnExpectation) -> list[str]:
     failures: list[str] = []
     agents = set(result.get("activated_agents", []))
     final_message = str(result.get("final_message", "")).lower()
     topic = str(result.get("current_topic", ""))
 
+    # Collect all failures so the command can report every mismatch.
     missing_agents = expectation.expected_agents - agents
     unexpected_agents = expectation.not_expected_agents & agents
     if missing_agents:
@@ -186,6 +194,7 @@ def check_turn(result: dict[str, Any], expectation: TurnExpectation) -> list[str
     return failures
 
 
+# Run all HTTP scenarios and return a shell-friendly exit code.
 def main() -> int:
     run_id = int(time.time())
     all_failures: list[str] = []
@@ -195,6 +204,7 @@ def main() -> int:
     print()
 
     for scenario_index, scenario in enumerate(SCENARIOS, start=1):
+        # Use unique ids so previous manual runs do not pollute memory.
         user_id = f"auto_test_user_{run_id}_{scenario_index}"
         conversation_id = f"auto_test_conversation_{run_id}_{scenario_index}"
         print(f"[{scenario_index}] {scenario.name}")
@@ -203,6 +213,7 @@ def main() -> int:
             try:
                 result = post_chat(expectation.message, user_id, conversation_id)
             except urllib.error.URLError as exc:
+                # Missing backend is a setup issue, not a product assertion failure.
                 print("  Backend is not reachable.")
                 print("  Start FastAPI first with: uvicorn app.main:app --reload")
                 print(f"  Details: {exc}")
@@ -224,6 +235,7 @@ def main() -> int:
         print()
 
     if all_failures:
+        # Print every failure before returning nonzero for automation.
         print("Some tests failed:")
         for failure in all_failures:
             print(f"- {failure}")
@@ -233,5 +245,6 @@ def main() -> int:
     return 0
 
 
+# Make the script runnable from the command line.
 if __name__ == "__main__":
     sys.exit(main())

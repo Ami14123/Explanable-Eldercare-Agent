@@ -1,3 +1,4 @@
+# Guardrail tests for final-response safety replacements and alert priority.
 from app.graph import (
     _alert_template,
     _set_alert_if_not_downgrade,
@@ -6,17 +7,21 @@ from app.graph import (
 )
 
 
+# Assert a value appears in a container with a helpful failure label.
 def assert_in(member, container, label: str) -> None:
     if member not in container:
         raise AssertionError(f"{label}: expected {member!r} in {container!r}")
 
 
+# Assert a value does not appear in a container with a helpful failure label.
 def assert_not_in(member, container, label: str) -> None:
     if member in container:
         raise AssertionError(f"{label}: expected {member!r} not in {container!r}")
 
 
+# Run all output-guardrail checks.
 def main() -> None:
+    # Fraud router context should trigger concrete guidance for vague wording.
     fraud_router = {
         "active_topic": "safety",
         "activated_agents": ["safety_agent"],
@@ -24,6 +29,7 @@ def main() -> None:
     }
     no_alert = {"alert_required": False, "alert_type": "none", "alert_level": "low"}
 
+    # Vague safety advice should be replaced in fraud context.
     result = apply_output_guardrails(
         "Trust your instincts and prioritize your safety.",
         alert_decision=no_alert,
@@ -33,6 +39,7 @@ def main() -> None:
     assert_not_in("trust your instincts", result["final_message"].lower(), "vague phrase removed")
     assert_in("official phone number", result["final_message"].lower(), "concrete verification guidance")
 
+    # Already concrete fraud advice should pass without replacement.
     result = apply_output_guardrails(
         "End the call and verify the claim using an official number you find independently.",
         alert_decision=no_alert,
@@ -41,6 +48,7 @@ def main() -> None:
     assert_not_in("vague_safety_advice", result["guardrail_issues"], "already safe fraud response")
     assert result["fallback_used"] is False
 
+    # Caregiver-contact wording should match alert policy.
     result = apply_output_guardrails(
         "Call your caregiver immediately.",
         alert_decision=no_alert,
@@ -49,6 +57,7 @@ def main() -> None:
     assert_in("alert_decision_response_mismatch", result["guardrail_issues"], "alert mismatch")
     assert result["fallback_used"] is True
 
+    # Higher-priority alerts should not be downgraded.
     alert = _alert_template()
     _set_alert_if_not_downgrade(
         alert,
@@ -69,6 +78,7 @@ def main() -> None:
     assert alert["alert_type"] == "emergency"
     assert alert["alert_level"] == "high"
 
+    # User-requested caregiver contact during emergency should be preserved.
     exact = evaluate_alert_decision("I feel dizzy and I am about to fall, call my caregiver")
     assert exact["alert_required"] is True
     assert exact["alert_type"] == "emergency"
@@ -78,5 +88,6 @@ def main() -> None:
     print("All guardrail tests passed.")
 
 
+# Allow direct command-line execution.
 if __name__ == "__main__":
     main()

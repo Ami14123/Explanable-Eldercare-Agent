@@ -1,3 +1,4 @@
+# Safe error responses for the public chat endpoint.
 from __future__ import annotations
 
 import traceback
@@ -6,6 +7,7 @@ from pathlib import Path
 from app.schemas import ChatResponse
 
 
+# Hide internal exceptions from users while keeping a local debug file.
 def build_safe_chat_error_response() -> ChatResponse:
     """
     Store the traceback locally and return a sanitized chat error.
@@ -13,12 +15,14 @@ def build_safe_chat_error_response() -> ChatResponse:
     The API response deliberately avoids local paths and raw tracebacks.
     """
 
+    # Ensure the data folder exists before writing the diagnostic traceback.
     Path("data").mkdir(exist_ok=True)
     Path("data/last_chat_error.txt").write_text(
         traceback.format_exc(),
         encoding="utf-8",
     )
 
+    # Return a full ChatResponse so clients do not need special error parsing.
     return ChatResponse(
         final_message="I encountered an issue. Please try again.",
         active_mode="Error",
@@ -50,5 +54,6 @@ def build_safe_chat_error_response() -> ChatResponse:
         memory_summary={},
         situation={},
         care_plan={},
+        # Keep the visible error generic while marking the developer trace.
         developer_state={"error": "chat_failed"},
     )

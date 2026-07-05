@@ -1,3 +1,4 @@
+# Administrative FastAPI routes for status, logs, data, and RAG rebuilds.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
@@ -10,15 +11,19 @@ from app.rag import VECTOR_STORE_DIR, build_vector_store
 from app.schemas import KaggleDownloadResponse
 
 
+# Keep admin routes together under one router object.
 router = APIRouter()
 
 
+# Report runtime status without requiring admin credentials.
 @router.get("/status")
 def status() -> dict[str, str | int | bool]:
     """Return public runtime status without exposing local file paths."""
 
+    # Load settings and cached CSVs to summarize active local capabilities.
     settings = get_settings()
     csv_files = get_csv_files()
+    # Return only safe metadata, never secrets or filesystem paths.
     return {
         "name": "ElderGuard AI",
         "backend": "running",
@@ -35,6 +40,7 @@ def status() -> dict[str, str | int | bool]:
     }
 
 
+# Return recent stored chat logs for authorized admin users.
 @router.get("/logs")
 def logs(
     _: None = Depends(require_admin_token),
@@ -45,6 +51,7 @@ def logs(
     return recent_logs(limit=limit)
 
 
+# Download optional Kaggle demo data when an admin explicitly requests it.
 @router.post("/download-kaggle-datasets", response_model=KaggleDownloadResponse)
 def download_kaggle_datasets(
     _: None = Depends(require_admin_token),
@@ -54,6 +61,7 @@ def download_kaggle_datasets(
     return KaggleDownloadResponse(**download_datasets())
 
 
+# Rebuild local embeddings so the RAG retriever sees current knowledge files.
 @router.post("/rebuild-vector-store")
 def rebuild_vector_store(
     _: None = Depends(require_admin_token),
