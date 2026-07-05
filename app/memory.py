@@ -214,6 +214,7 @@ def get_relevant_care_events(user_id: str, limit: int = 8) -> list[dict[str, Any
 
 
 def save_message(user_id: str, conversation_id: str, role: str, message: str) -> int:
+    # Vietnamese note: Save memory luu tung turn user/assistant vao SQLite local.
     init_db()
     timestamp = datetime.now(timezone.utc).isoformat()
     with get_connection() as conn:
@@ -235,6 +236,7 @@ def get_recent_conversation(
     conversation_id: str = "default",
     limit: int = 10,
 ) -> list[dict[str, Any]]:
+    # Vietnamese note: Memory loading lay cac turn gan nhat de user khong phai reset moi lan.
     init_db()
     with get_connection() as conn:
         rows = conn.execute(
@@ -320,6 +322,7 @@ def save_interaction(
     response: ChatResponse,
     raw_json: dict[str, Any],
 ) -> int:
+    # Vietnamese note: Interaction log dung cho technical trace va admin audit trong prototype.
     init_db()
     timestamp = datetime.now(timezone.utc).isoformat()
     with get_connection() as conn:

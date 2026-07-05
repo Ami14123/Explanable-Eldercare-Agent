@@ -7,6 +7,7 @@ RiskLevel = Literal["low", "medium", "high"]
 
 
 class ChatRequest(BaseModel):
+    # Vietnamese note: Contract dau vao cua public chat API truoc gateway validation.
     message: str = Field(..., min_length=1)
     user_id: str = Field(default="demo_user", min_length=1)
     conversation_id: str = Field(default="default", min_length=1)
@@ -48,6 +49,7 @@ class SpecialistResult(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    # Vietnamese note: Contract dau ra gom final answer, alert, memory, va technical trace da sanitize.
     final_message: str
     active_mode: str = "Mock"
     final_message_source: str = "template"

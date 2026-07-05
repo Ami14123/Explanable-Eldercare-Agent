@@ -212,6 +212,7 @@ def _keyword_matches(lowered: str, keyword: str) -> bool:
 
 
 def query_care_graph(message: str) -> dict[str, Any]:
+    # Vietnamese note: GraphRAG anh xa tin hieu cua user thanh pathway va safety rule co the giai thich.
     lowered = message.lower()
     detected_nodes: list[str] = []
     risk_pathways: list[list[str]] = []

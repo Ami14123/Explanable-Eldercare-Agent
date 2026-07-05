@@ -43,9 +43,11 @@ def apply_styles() -> None:
             background: #ffffff;
             border: 1px solid #e2e8f0;
             border-radius: 20px;
-            padding: 1rem 1.1rem;
+            padding: 1.15rem 1.25rem;
             box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05);
             margin-bottom: 0.85rem;
+            font-size: 1.05rem;
+            line-height: 1.65;
         }
         .eg-card h4 {
             margin: 0 0 0.35rem 0;
@@ -108,9 +110,20 @@ def apply_styles() -> None:
             border: 1px solid #fdba74;
             border-left: 6px solid #fb923c;
             border-radius: 16px;
-            padding: 0.9rem 1rem;
+            padding: 1rem 1.1rem;
             color: #7c2d12;
             margin-top: 0.8rem;
+            font-size: 1.05rem;
+            line-height: 1.55;
+        }
+        div[data-testid="stChatMessage"] {
+            border-radius: 18px;
+            padding: 0.35rem 0.2rem;
+            margin-bottom: 0.6rem;
+        }
+        div[data-testid="stChatMessage"] p {
+            font-size: 1.08rem;
+            line-height: 1.65;
         }
         </style>
         """,

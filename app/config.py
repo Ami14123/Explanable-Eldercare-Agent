@@ -17,6 +17,7 @@ class Settings:
     llm_mode: str = "mock"
     openrouter_api_key: str = ""
     openrouter_model: str = ""
+    admin_api_token: str = ""
     kaggle_api_token: str = ""
     kaggle_username: str = ""
     kaggle_key: str = ""
@@ -60,6 +61,7 @@ def get_settings() -> Settings:
         llm_mode=os.getenv("LLM_MODE", "mock").strip().lower(),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
         openrouter_model=os.getenv("OPENROUTER_MODEL", ""),
+        admin_api_token=os.getenv("ADMIN_API_TOKEN", ""),
         kaggle_api_token=os.getenv("KAGGLE_API_TOKEN", ""),
         kaggle_username=os.getenv("KAGGLE_USERNAME", ""),
         kaggle_key=os.getenv("KAGGLE_KEY", ""),

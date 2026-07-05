@@ -91,6 +91,7 @@ def _load_vector_store():
 def build_vector_store() -> dict[str, object]:
     """Build or rebuild the local FAISS vector store from data/knowledge."""
 
+    # Vietnamese note: RAG dung knowledge noi bo/local data, khong goi embedding API ben ngoai.
     try:
         from langchain_community.vectorstores import FAISS
     except Exception as exc:
@@ -127,6 +128,7 @@ def build_vector_store() -> dict[str, object]:
 def retrieve_context(query: str) -> str:
     """Return relevant knowledge snippets, or an empty string if RAG is unavailable."""
 
+    # Vietnamese note: Neu vector store chua san sang, app van chay o che do an toan.
     try:
         store = _load_vector_store()
         if store is None:

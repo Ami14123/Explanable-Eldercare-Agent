@@ -27,7 +27,7 @@ from app.memory import (
     update_user_summary,
 )
 from app.memory_classifier import classify_memory, profile_updates_from_memories
-from app.ml_router import extract_latest_user_text, predict_route
+from app.ml_router import extract_latest_user_text, explain_ml_route
 from app.schemas import ChatRequest, ChatResponse
 
 
@@ -429,6 +429,7 @@ def _normalized_trace(state: ElderGuardState) -> dict[str, Any]:
 
 
 def memory_context_builder_node(state: ElderGuardState) -> ElderGuardState:
+    # Vietnamese note: Memory loading + GraphRAG chuan bi ngu canh truoc khi router chon agent.
     request = state["request"]
     client_history = [
         {"role": item.get("role", ""), "message": item.get("message") or item.get("content", "")}
@@ -457,6 +458,7 @@ def memory_context_builder_node(state: ElderGuardState) -> ElderGuardState:
 
 
 def rule_router_node(state: ElderGuardState) -> ElderGuardState:
+    # Vietnamese note: Hybrid router bat dau bang luat an toan de tranh bo sot rui ro.
     message = state["request"].message
     text = message.lower()
     history_text = " ".join(
@@ -467,10 +469,10 @@ def rule_router_node(state: ElderGuardState) -> ElderGuardState:
     activated: list[str] = []
     topics: list[str] = []
     signals: list[str] = []
-
+    ## issue: how to constantly update the terms with user query? the term database should be built up to date 
     safety_terms = ["email", "link", "click", "login", "password", "otp", "bank", "money", "transfer", "police", "scam", "fall", "fell", "chest pain", "can't breathe", "emergency"]
     health_terms = ["dizzy", "weak", "medicine", "medication", "pill", "dose", "hungry", "food", "banana", "juice", "nutrition", "empty stomach", "walk", "mobility", "pain", "fever"]
-    emotional_terms = ["lonely", "sad", "worried", "stress", "stressed", "family", "children", "friend", "support"]
+    emotional_terms = ["lonely","alone","sad","worried","worry","afraid","scared","fear","nervous","anxious","stress","stressed","miss","daughter","son","family","children","friend","support"]
     action_terms = ["write", "draft", "message", "checklist", "reminder", "script", "caregiver note", "what should i say"]
 
     if _contains(text, safety_terms) or (
@@ -620,21 +622,95 @@ def _update_router_state(
     return updated_state
 
 
+def _attach_xai_decision(
+    router_decision: dict[str, Any],
+    *,
+    rule_route: str,
+    final_route: str,
+    router_source: str,
+    explanation_text: str,
+    ml_explanation: dict[str, Any] | None = None,
+    error_message: str = "",
+) -> dict[str, Any]:
+    """
+    Attach a structured explanation to router_decision.
+    """
+
+    ml_data = ml_explanation or {}
+
+    router_decision["xai"] = {
+        "rule_candidate": rule_route,
+        "ml_candidate": str(
+            ml_data.get(
+                "graph_route",
+                "",
+            )
+        ),
+        "model_label": str(
+            ml_data.get(
+                "model_label",
+                "",
+            )
+        ),
+        "alternative_model_label": str(
+            ml_data.get(
+                "alternative_model_label",
+                "",
+            )
+        ),
+        "alternative_graph_route": str(
+            ml_data.get(
+                "alternative_graph_route",
+                "",
+            )
+        ),
+        "final_route": final_route,
+        "final_agents": list(
+            router_decision.get(
+                "activated_agents",
+                [],
+            )
+        ),
+        "router_source": router_source,
+        "decision_margin": ml_data.get(
+            "decision_margin"
+        ),
+        "margin_is_probability": False,
+        "supporting_terms": list(
+            ml_data.get(
+                "supporting_terms",
+                [],
+            )
+        ),
+        "opposing_terms": list(
+            ml_data.get(
+                "opposing_terms",
+                [],
+            )
+        ),
+        "explanation_text": (
+            explanation_text
+        ),
+        "error_message": error_message,
+    }
+
+    return router_decision
 def router_node(
     state: ElderGuardState,
 ) -> ElderGuardState:
     """
-    Safe hybrid router.
+    Explainable hybrid router.
 
-    Rules remain responsible for:
+    Rules handle:
     1. High risk situations
     2. Action requests
-    3. Multi agent requests
-    4. Context dependent follow up messages
+    3. Multiple agents
+    4. Strong contextual evidence
 
     ML handles normal single agent routing.
     """
 
+    # Vietnamese note: Rule-based override uu tien khi co rui ro cao hoac nhieu intent.
     rule_state = rule_router_node(
         state
     )
@@ -646,76 +722,134 @@ def router_node(
         )
     )
 
+    rule_agents = list(
+        router_decision.get(
+            "activated_agents",
+            [],
+        )
+    )
+
+    rule_route = str(
+        router_decision.get(
+            "selected_agent",
+            "",
+        )
+    )
+
+    priority = str(
+        router_decision.get(
+            "priority",
+            "low",
+        )
+    )
+
+    active_topic = str(
+        router_decision.get(
+            "active_topic",
+            "",
+        )
+    )
+
+    detected_signals = list(
+        router_decision.get(
+            "detected_signals",
+            [],
+        )
+    )
+
     if not ml_router_is_enabled():
-        logger.info(
-            "Router source=rules"
+        router_decision[
+            "router_source"
+        ] = "rules"
+
+        router_decision = (
+            _attach_xai_decision(
+                router_decision,
+                rule_route=rule_route,
+                final_route=rule_route,
+                router_source="rules",
+                explanation_text=(
+                    "The ML router is disabled. "
+                    "The local rule router selected "
+                    "the final specialist."
+                ),
+            )
         )
 
-        return rule_state
+        logger.info(
+            "Router source=rules "
+            "route=%s",
+            rule_route,
+        )
+
+        return _update_router_state(
+            rule_state,
+            router_decision,
+        )
 
     try:
-        user_text = extract_latest_user_text(
-            state
-        )
-
-        ml_route = predict_route(
-            user_text
-        )
-
-        rule_agents = list(
-            router_decision.get(
-                "activated_agents",
-                [],
+        user_text = (
+            extract_latest_user_text(
+                state
             )
         )
 
-        rule_route = str(
-            router_decision.get(
-                "selected_agent",
-                "",
+        ml_explanation = (
+            explain_ml_route(
+                user_text
             )
         )
 
-        priority = str(
-            router_decision.get(
-                "priority",
-                "low",
-            )
+        ml_route = str(
+            ml_explanation[
+                "graph_route"
+            ]
         )
 
-        active_topic = str(
-            router_decision.get(
-                "active_topic",
-                "",
-            )
-        )
-
-        detected_signals = list(
-            router_decision.get(
-                "detected_signals",
-                [],
-            )
-        )
-
-        router_decision["ml_candidate"] = (
-            ml_route
-        )
+        router_decision[
+            "ml_candidate"
+        ] = ml_route
 
         must_keep_rules = (
             priority == "high"
-            or "action_agent" in rule_agents
+            or "action_agent"
+            in rule_agents
             or len(rule_agents) > 1
         )
 
         if must_keep_rules:
-            router_decision["router_source"] = (
+            router_source = (
                 "rules_override"
             )
 
-            router_decision["reason"] = (
-                "Rules were kept because the message "
-                "contains a high risk situation, "
-                "an action request, or multiple agents."
+            reason = (
+                "Safety and workflow rules "
+                "had priority because the message "
+                "contained high risk, an action "
+                "request, or multiple relevant agents."
+            )
+
+            router_decision[
+                "router_source"
+            ] = router_source
+
+            router_decision[
+                "reason"
+            ] = reason
+
+            router_decision = (
+                _attach_xai_decision(
+                    router_decision,
+                    rule_route=rule_route,
+                    final_route=rule_route,
+                    router_source=(
+                        router_source
+                    ),
+                    explanation_text=reason,
+                    ml_explanation=(
+                        ml_explanation
+                    ),
+                )
             )
 
             logger.info(
@@ -740,14 +874,38 @@ def router_node(
             rule_has_clear_evidence
             and ml_route != rule_route
         ):
-            router_decision["router_source"] = (
+            router_source = (
                 "rules_ml_disagreement"
             )
 
-            router_decision["reason"] = (
-                "ML and rule routing disagreed. "
-                "The rule route was kept because "
-                "the rule router found clear evidence."
+            reason = (
+                "The ML model and rule router "
+                "disagreed. The rule route was "
+                "retained because it found clear "
+                "message or conversation evidence."
+            )
+
+            router_decision[
+                "router_source"
+            ] = router_source
+
+            router_decision[
+                "reason"
+            ] = reason
+
+            router_decision = (
+                _attach_xai_decision(
+                    router_decision,
+                    rule_route=rule_route,
+                    final_route=rule_route,
+                    router_source=(
+                        router_source
+                    ),
+                    explanation_text=reason,
+                    ml_explanation=(
+                        ml_explanation
+                    ),
+                )
             )
 
             logger.warning(
@@ -763,50 +921,68 @@ def router_node(
                 router_decision,
             )
 
-        router_decision["selected_agent"] = (
-            ml_route
-        )
+        router_decision[
+            "selected_agent"
+        ] = ml_route
 
-        router_decision["activated_agents"] = [
-            ml_route
-        ]
+        router_decision[
+            "activated_agents"
+        ] = [ml_route]
 
-        router_decision["ml_route"] = (
-            ml_route
-        )
+        router_decision[
+            "ml_route"
+        ] = ml_route
 
         if ml_route == rule_route:
-            router_decision["router_source"] = (
+            router_source = (
                 "ml_confirmed"
             )
 
-            router_decision["reason"] = (
-                "ML and rule routing selected "
-                "the same specialist."
+            reason = (
+                "The ML model and rule router "
+                "selected the same specialist."
             )
 
         else:
-            router_decision["router_source"] = (
-                "ml"
+            router_source = "ml"
+
+            router_decision[
+                "active_topic"
+            ] = GRAPH_ROUTE_TO_TOPIC.get(
+                ml_route,
+                "general_daily_life",
             )
 
-            router_decision["active_topic"] = (
-                GRAPH_ROUTE_TO_TOPIC.get(
-                    ml_route,
-                    "general_daily_life",
-                )
+            reason = (
+                "The rule router found no clear "
+                "signal, so the ML model selected "
+                "the specialist."
             )
 
-            router_decision["reason"] = (
-                "The rule router had no clear signal, "
-                "so the ML router selected the specialist."
+        router_decision[
+            "router_source"
+        ] = router_source
+
+        router_decision[
+            "reason"
+        ] = reason
+
+        router_decision = (
+            _attach_xai_decision(
+                router_decision,
+                rule_route=rule_route,
+                final_route=ml_route,
+                router_source=router_source,
+                explanation_text=reason,
+                ml_explanation=(
+                    ml_explanation
+                ),
             )
+        )
 
         logger.info(
             "Router source=%s route=%s",
-            router_decision[
-                "router_source"
-            ],
+            router_source,
             ml_route,
         )
 
@@ -816,22 +992,41 @@ def router_node(
         )
 
     except Exception as error:
-        logger.exception(
-            "ML router failed. "
-            "Using rule router fallback."
-        )
-
-        router_decision["router_source"] = (
+        router_source = (
             "rules_fallback"
         )
 
-        router_decision["ml_router_error"] = (
-            str(error)
-        )
-
-        router_decision["reason"] = (
+        reason = (
             "The ML router failed, so the "
             "rule router result was retained."
+        )
+
+        router_decision[
+            "router_source"
+        ] = router_source
+
+        router_decision[
+            "ml_router_error"
+        ] = str(error)
+
+        router_decision[
+            "reason"
+        ] = reason
+
+        router_decision = (
+            _attach_xai_decision(
+                router_decision,
+                rule_route=rule_route,
+                final_route=rule_route,
+                router_source=router_source,
+                explanation_text=reason,
+                error_message=str(error),
+            )
+        )
+
+        logger.exception(
+            "ML router failed. "
+            "Using rule router fallback."
         )
 
         return _update_router_state(
@@ -853,6 +1048,7 @@ def _agent_result(agent: str, risk: str, signals: list[str], actions: list[str],
 
 
 def broad_agent_reasoning_node(state: ElderGuardState) -> ElderGuardState:
+    # Vietnamese note: Specialist reasoning chi tao bang chung co cau truc, khong noi truc tiep voi user.
     message = state["request"].message
     text = message.lower()
     router = state["router_decision"]
@@ -900,6 +1096,7 @@ def broad_agent_reasoning_node(state: ElderGuardState) -> ElderGuardState:
 
 
 def alert_decision_node(state: ElderGuardState) -> ElderGuardState:
+    # Vietnamese note: Alert decision chi chuan bi canh bao; prototype khong gui thong bao that.
     return _trace(state, "alert_decision", alert_decision=evaluate_alert_decision(state["request"].message))
 
 
@@ -911,13 +1108,21 @@ def _mock_conversation_reply(state: ElderGuardState) -> dict[str, Any]:
         if alert.get("alert_type") == "health" and "dizzy" in text:
             final = "Please sit or lie down now. Since you feel dizzy after standing, I recommend asking someone nearby to check on you. If you have chest pain, trouble breathing, fainting, confusion, or you fall, call emergency services."
         elif alert.get("alert_type") == "fraud":
-            final = "Please do not click the link or share any login, password, bank, or money information yet. Ask a trusted person to check it first, or contact the organization using an official number or website."
+            final = "Please do not share your bank password, one-time code, account details, or any money information. A real bank or official service should not pressure you to give a password. End the call or message, then contact the bank using the official phone number or app. If you are unsure, ask a trusted family member to check it with you."
         else:
             final = f"This may need help from {alert.get('recommended_contact', 'a trusted person')}. {alert.get('caregiver_message', '')}"
     elif "banana" in text and "empty stomach" in text:
         final = "A banana is usually a gentle food for many people, but if your stomach feels upset, start with a small amount and some water. Do you feel hungry, nauseous, or dizzy right now?"
     elif "email" in text or "link" in text:
         final = "Do not click the link yet. Please check who sent it and whether you expected it before opening anything."
+    elif "password" in text or "bank" in text or "otp" in text:
+        final = "Please do not share your bank password, OTP, or account information. If someone is asking for those details, stop the conversation and use the official bank number or app to check. Would you like help writing a short message to a family member to verify it?"
+    elif "dizzy" in text or "dizziness" in text or "lightheaded" in text:
+        final = "I’m sorry you feel dizzy. Please sit or lie down somewhere safe and avoid walking alone for the moment. Did this happen after standing up, and do you also have chest pain, trouble breathing, fainting, confusion, or a fall?"
+    elif "lonely" in text or "alone" in text or "sad" in text:
+        final = "I’m sorry you’re feeling lonely. That can feel heavy, especially when friends or family are busy. You do not have to handle the feeling alone. Would you like me to help you write a short message asking someone to check in with you today?"
+    elif "medicine" in text or "medication" in text or "pill" in text or "dose" in text:
+        final = "If you are unsure about medicine, please do not take an extra dose or change the dosage on your own. Check the label if you can, and ask a pharmacist, doctor, clinic, or caregiver to confirm the safest next step."
     elif "hungry" in text:
         final = "I’m sorry you’re hungry. What simple food do you have nearby, such as bread, rice, soup, eggs, banana, or crackers?"
     else:
@@ -932,6 +1137,7 @@ def _mock_conversation_reply(state: ElderGuardState) -> dict[str, Any]:
 
 
 def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
+    # Vietnamese note: Conversation agent la noi duy nhat viet phan hoi tu nhien cho nguoi dung.
     settings = get_settings()
     memory_context = state["memory_context"]
     router = state["router_decision"]
@@ -996,7 +1202,7 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
             if not coordinated["final_message"]:
                 raise RuntimeError(f"Conversation Agent returned empty final_message. Raw output: {raw[:1000]}")
         except Exception as exc:
-            error = {
+            local_error = {
                 "error_type": type(exc).__name__,
                 "raw_error": str(exc),
                 "traceback": traceback.format_exc(),
@@ -1005,15 +1211,23 @@ def conversation_agent_node(state: ElderGuardState) -> ElderGuardState:
                 "llm_mode": settings.llm_mode,
                 "llm_calls_this_turn": get_llm_call_counter(),
             }
+            safe_error = {
+                "error_type": type(exc).__name__,
+                "raw_error": str(exc),
+                "llm_provider": settings.llm_provider,
+                "llm_model": settings.active_llm_model,
+                "llm_mode": settings.llm_mode,
+                "llm_calls_this_turn": get_llm_call_counter(),
+            }
             Path("data").mkdir(exist_ok=True)
-            Path("data/conversation_agent_error.txt").write_text(json.dumps(error, ensure_ascii=False, indent=2), encoding="utf-8")
+            Path("data/conversation_agent_error.txt").write_text(json.dumps(local_error, ensure_ascii=False, indent=2), encoding="utf-8")
             coordinated = {
-                "final_message": f"Conversation Agent error: {type(exc).__name__}: {exc}",
+                "final_message": "I am having trouble generating a full response right now. Please try again in a moment.",
                 "xai_simple": "The selected LLM provider failed. See Developer Console for the full error.",
                 "follow_up_questions": [],
                 "final_message_source": "safe_service_failure",
                 "active_mode": "LLMError",
-                "llm_error": error,
+                "llm_error": safe_error,
                 "raw_llm_output": "",
                 "prompt_name": prompt_name,
                 "prompt_version": prompt_version,
@@ -1039,6 +1253,7 @@ def _json_from_text(text: str) -> dict[str, Any]:
 
 
 def guardrails_node(state: ElderGuardState) -> ElderGuardState:
+    # Vietnamese note: Guardrails kiem tra phan hoi cuoi truoc khi luu memory va tra ve UI.
     coordinated = dict(state["coordinated"])
     response_before_guardrail = str(coordinated.get("final_message", ""))
     guardrail_result = apply_output_guardrails(
@@ -1152,6 +1367,7 @@ def guardrails_node(state: ElderGuardState) -> ElderGuardState:
 
 
 def save_memory_node(state: ElderGuardState) -> ElderGuardState:
+    # Vietnamese note: Save memory phan loai thong tin truoc khi luu vao SQLite va technical trace.
     request = state["request"]
     response = state["final_response"]
     llm_error = response.developer_state.get("llm_error", {})
@@ -1210,6 +1426,7 @@ def save_memory_node(state: ElderGuardState) -> ElderGuardState:
 
 
 def _write_trace_artifact(request: ChatRequest, raw_json: dict[str, Any]) -> None:
+    # Vietnamese note: Technical trace giup developer giai thich workflow, khong hien o elder view.
     trace_dir = Path("data/traces")
     trace_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -1280,16 +1497,21 @@ def run_elderguard_workflow(request: ChatRequest) -> ChatResponse:
         emergency_hint = ""
         if any(term in text for term in ["chest pain", "can't breathe", "trouble breathing", "fainted", "confusion", "hurt myself", "kill myself"]):
             emergency_hint = " If this may be urgent, please contact emergency services or a trusted nearby person now."
-        error = {
+        local_error = {
             "error_type": type(exc).__name__,
             "raw_error": str(exc),
             "traceback": traceback.format_exc(),
             "llm_calls_this_turn": get_llm_call_counter(),
         }
+        safe_error = {
+            "error_type": type(exc).__name__,
+            "raw_error": str(exc),
+            "llm_calls_this_turn": get_llm_call_counter(),
+        }
         Path("data").mkdir(exist_ok=True)
-        Path("data/last_chat_error.txt").write_text(json.dumps(error, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path("data/last_chat_error.txt").write_text(json.dumps(local_error, ensure_ascii=False, indent=2), encoding="utf-8")
         return ChatResponse(
-            final_message=f"Service configuration error: {type(exc).__name__}: {exc}.{emergency_hint}",
+            final_message=f"ElderGuard is having a service problem right now. Please try again in a moment.{emergency_hint}",
             active_mode="Error",
             final_message_source="workflow_error",
             activated_agents=[],
@@ -1308,6 +1530,6 @@ def run_elderguard_workflow(request: ChatRequest) -> ChatResponse:
                 "active_topic": "",
                 "activated_agents": [],
                 "router_decision": {},
-                "llm_error": error,
+                "llm_error": safe_error,
             },
         )
