@@ -1,7 +1,7 @@
 # ElderGuard AI
 Safe, explainable multi-agent eldercare assistant( prototype, human in the loop system)
 
-<img width="1448" height="1086" alt="image" src="https://github.com/user-attachments/assets/ca93b9f5-dff1-4a34-84a3-b792258831f1" />
+
 
 
 
