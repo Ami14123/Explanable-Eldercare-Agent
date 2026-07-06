@@ -61,6 +61,28 @@ flowchart LR
 
 Normal live mode targets `llm_calls_this_turn = 1`. Router logic, broad agents, memory, Graph RAG context, guardrails, traces, and alert checks run locally in Python.
 
+## Special Feature: Machine Learning Router
+
+### Goal
+
+* Input: user message text
+* Output: predicted care area + confidence score
+* Used in agent: helps select which care agents should respond before reasoning
+
+### Pipeline
+
+```mermaid
+flowchart TD
+    A[User Message] --> B[Preprocess Text]
+    B --> C[ML Router Model]
+    C --> D[Predicted Care Area]
+    C --> E[Confidence Score]
+    D --> F[Agent Selection]
+    E --> F
+    F --> G[Activated Agents]
+```
+
+
 ## Simple Interface for different groups of users
 
 ```mermaid
