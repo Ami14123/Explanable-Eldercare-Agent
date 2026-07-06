@@ -61,7 +61,7 @@ flowchart LR
 
 Normal live mode targets `llm_calls_this_turn = 1`. Router logic, broad agents, memory, Graph RAG context, guardrails, traces, and alert checks run locally in Python.
 
-## User Views
+## Simple Interface for different groups of users
 
 ```mermaid
 flowchart LR
