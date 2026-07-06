@@ -87,7 +87,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     A[User Message] --> B[SQLite Conversation Memory]
-    A --> C[Local Care Graph]
+    A --> C[Local Care Graph- Internal Datasource]
     A --> D[FAISS Knowledge Store]
 
     B --> E[Context Builder]
@@ -153,9 +153,6 @@ streamlit run streamlit_app.py
 LLM_MODE=mock
 OPENROUTER_API_KEY=
 OPENROUTER_MODEL=openai/gpt-4o-mini
-KAGGLE_API_TOKEN=
-KAGGLE_USERNAME=
-KAGGLE_KEY=
 ```
 
 For live mode:
@@ -233,6 +230,7 @@ Content-Type: application/json
 | Medication uncertainty | `I forgot my blood pressure medicine` |
 | Emotional support | `I feel lonely because my friends are busy` |
 | Mixed risk | `I feel dizzy, someone asked for my OTP, and I need support.` |
+<img width="998" height="534" alt="4" src="https://github.com/user-attachments/assets/405d07e1-f11b-484f-a279-0e57c578e6eb" />
 
 ## Testing
 
@@ -265,8 +263,7 @@ Elder-facing workflows do not expose internal routing, raw JSON, hidden prompts,
 | Area | Next Step |
 | --- | --- |
 | Evaluation | Add stronger safety and hallucination tests |
-| UI | Add final screenshots and short demo video |
-| RAG | Expand eldercare knowledge files |
+| RAG (Vector Database) | Expand eldercare knowledge files |
 | Deployment | Add Docker and cloud deployment guide |
 | Security | Add authentication for family and developer views |
 
