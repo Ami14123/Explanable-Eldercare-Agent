@@ -112,7 +112,7 @@ flowchart LR
     E --> G[OPENROUTER_MODEL]
 ```
 
-OpenRouter is the only live LLM provider used in this prototype. Kaggle datasets are optional and are skipped when credentials are missing.
+OpenRouter is the only live LLM provider used in this prototype
 
 ## Tech Stack
 
