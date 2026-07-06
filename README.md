@@ -62,6 +62,7 @@ flowchart LR
 Normal live mode targets `llm_calls_this_turn = 1`. Router logic, broad agents, memory, Graph RAG context, guardrails, traces, and alert checks run locally in Python.
 
 ## Special Feature: Machine Learning Router
+Core notebook: https://colab.research.google.com/drive/11870M5ySbG0VZfjGAxaj1xQa9iZhxXmk?usp=sharing
 
 ### Goal
 
