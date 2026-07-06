@@ -22,7 +22,7 @@ Safe, explainable multi-agent eldercare assistant( prototype, human in the loop 
 
 ```mermaid
 flowchart TD
-    A[Streamlit UI] --> B[HTTP Request]
+    A[Streamlit UI{User Query}] --> B[HTTP Request]
     B --> C[FastAPI /chat Endpoint]
     C --> D[LangGraph StateGraph Workflow]
     D --> E[memory_context_builder]
