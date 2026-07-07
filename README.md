@@ -2,9 +2,6 @@
 Safe, explainable multi-agent eldercare assistant( prototype, human in the loop system)
 
 
-
-
-
 ## Project Highlights
 
 | Area | Implementation |
@@ -45,7 +42,7 @@ flowchart TD
     L --> N[Response Back to UI]
 ```
 
-## Runtime Design
+## Workflow design
 
 ```mermaid
 flowchart LR
@@ -60,6 +57,36 @@ flowchart LR
 ```
 
 Normal live mode targets `llm_calls_this_turn = 1`. Router logic, broad agents, memory, Graph RAG context, guardrails, traces, and alert checks run locally in Python.
+
+## Knowledge Base
+
+Data sources used
+• Curated local Markdown files in data/knowledge/
+• Local FAISS vector store for RAG retrieval
+• Lightweight care knowledge graph in app/care_graph.py
+• SQLite conversation memory for recent chat context
+• Optional Kaggle datasets for spam, fall detection, and medication adherence
+
+Number and type of documents
+• 4 core Markdown knowledge files
+• eldercare_safety.md
+• medication_safety.md
+• scam_prevention.md
+• fall_prevention.md
+• 3 optional Kaggle CSV datasets can be cached in data/raw/
+
+Why this knowledge source was selected
+• Covers common elderly care risks: safety, medicine, scams, and falls
+• Local files are easy to inspect, update, and explain
+• FAISS allows the system to retrieve relevant care information before generating the answer
+• Care graph adds explainable reasoning paths, such as dizziness → fall risk → sit down → caregiver alert
+
+Limitations
+• Small prototype knowledge base, not a full medical database
+• Not a replacement for doctors, pharmacists, caregivers, or emergency services
+• May not cover rare or complex elderly care situations
+• Kaggle datasets are optional and are skipped if credentials are missing
+• Knowledge should be reviewed by care or medical experts before real deployment
 
 ## Special Feature: Machine Learning Router
 Core notebook: https://colab.research.google.com/drive/11870M5ySbG0VZfjGAxaj1xQa9iZhxXmk?usp=sharing
@@ -136,6 +163,57 @@ flowchart LR
 ```
 
 OpenRouter is the only live LLM provider used in this prototype
+
+
+
+## Demo Scenarios
+
+| Scenario | Example Input |
+| --- | --- |
+| Daily need | `I want juice but I don't have money to buy` |
+| Scam risk | `Someone emailed me but I don't know them, should I click the link?` |
+| Fall risk | `I feel dizzy after standing up` |
+| Medication uncertainty | `I forgot my blood pressure medicine` |
+| Emotional support | `I feel lonely because my friends are busy` |
+| Mixed risk | `I feel dizzy, someone asked for my OTP, and I need support.` |
+<img width="998" height="534" alt="4" src="https://github.com/user-attachments/assets/405d07e1-f11b-484f-a279-0e57c578e6eb" />
+
+## Privacy and Safety Model
+
+```mermaid
+flowchart TD
+    A[Older Adult] --> B[Simple Response]
+    B --> C[No Internal Traces Shown]
+
+    D[Family or Caregiver] --> E[Concise Safety Summary]
+    E --> F[Risk Level and Suggested Action]
+
+    G[Developer] --> H[Sanitized Technical Trace]
+    H --> I[Secrets and Hidden Prompts Redacted]
+```
+
+Elder-facing workflows do not expose internal routing, raw JSON, hidden prompts, API keys, or developer traces. High-risk cases can trigger caregiver alerts or human confirmation flags.
+
+## Future Improvements
+
+| Area | Next Step |
+| --- | --- |
+| Evaluation | Add stronger safety and hallucination tests |
+| RAG (Vector Database) | Expand eldercare knowledge files |
+| Deployment | Add Docker and cloud deployment guide |
+| Security | Add authentication for family and developer views |
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Tech Stack
 
@@ -243,17 +321,7 @@ Content-Type: application/json
 }
 ```
 
-## Demo Scenarios
 
-| Scenario | Example Input |
-| --- | --- |
-| Daily need | `I want juice but I don't have money to buy` |
-| Scam risk | `Someone emailed me but I don't know them, should I click the link?` |
-| Fall risk | `I feel dizzy after standing up` |
-| Medication uncertainty | `I forgot my blood pressure medicine` |
-| Emotional support | `I feel lonely because my friends are busy` |
-| Mixed risk | `I feel dizzy, someone asked for my OTP, and I need support.` |
-<img width="998" height="534" alt="4" src="https://github.com/user-attachments/assets/405d07e1-f11b-484f-a279-0e57c578e6eb" />
 
 ## Testing
 
@@ -265,30 +333,7 @@ python test_examples.py
 
 The tests cover topic switching, follow-up memory, agent activation, health cases, medication cases, fraud cases, emotional support, and mixed-risk conversations.
 
-## Privacy and Safety Model
 
-```mermaid
-flowchart TD
-    A[Older Adult] --> B[Simple Response]
-    B --> C[No Internal Traces Shown]
-
-    D[Family or Caregiver] --> E[Concise Safety Summary]
-    E --> F[Risk Level and Suggested Action]
-
-    G[Developer] --> H[Sanitized Technical Trace]
-    H --> I[Secrets and Hidden Prompts Redacted]
-```
-
-Elder-facing workflows do not expose internal routing, raw JSON, hidden prompts, API keys, or developer traces. High-risk cases can trigger caregiver alerts or human confirmation flags.
-
-## Future Improvements
-
-| Area | Next Step |
-| --- | --- |
-| Evaluation | Add stronger safety and hallucination tests |
-| RAG (Vector Database) | Expand eldercare knowledge files |
-| Deployment | Add Docker and cloud deployment guide |
-| Security | Add authentication for family and developer views |
 
 ## Topics
 
