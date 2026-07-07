@@ -1,20 +1,6 @@
 # ElderGuard AI
 Safe, explainable multi-agent eldercare assistant( prototype, human in the loop system)
 
-
-## Project Highlights
-
-| Area | Implementation |
-| --- | --- |
-| Backend | FastAPI `/chat` endpoint |
-| Workflow | Simplified LangGraph `StateGraph` |
-| Agents | Safety, Health & Daily Care, Emotional & Social, Action |
-| Memory | SQLite conversation logs with `user_id` and `conversation_id` |
-| Retrieval | Local FAISS RAG plus lightweight care graph in `app/care_graph.py` |
-| LLM Provider | OpenRouter in live mode, deterministic mock mode for testing |
-| UI | Streamlit demo with Elder View, Family Summary, Technical Trace |
-| Safety | Guardrails, alert decision, human confirmation flags |
-
 ## System Architecture
 
 ```mermaid
