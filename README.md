@@ -53,7 +53,7 @@ The ElderGuard AI agent uses a small, curated knowledge base to support safer an
 The system uses the following knowledge sources:
 
 * Curated local Markdown files stored in `data/knowledge/`
-* Local FAISS vector store for RAG retrieval
+* Local FAISS vector store for RAG retrieval (Facebook AI similarity search:  open source library: vector embedding)
 * Lightweight care knowledge graph in `app/care_graph.py`
 * SQLite conversation memory for recent chat context
 * Optional Kaggle datasets for spam detection, fall detection, and medication adherence
@@ -77,13 +77,14 @@ These datasets are optional and are only used when Kaggle credentials are config
 
 ### Why This Knowledge Source Was Selected
 
-These knowledge sources were selected because they cover common and high impact elderly care risks. The selected topics are practical for real conversations with elderly users, including safety concerns, medication uncertainty, online scams, and fall related risks.
+Cover common and high impact elderly care risks, practical for real conversations with elderly users, including safety concerns, medication uncertainty, online scams, and fall related risks.
 
-The local Markdown format makes the knowledge base easy to inspect, update, and explain. This is important for transparency because developers can directly review what information the system uses.
+The local Markdown format makes the knowledge base easy to inspect, update, and explain. ==> transparency
 
-FAISS allows the system to retrieve relevant care information before generating an answer. This helps reduce unsupported responses and makes the output more grounded.
+FAISS allows the system to retrieve relevant care information before generating an answer  ===>  reduce unsupported responses and makes the output more grounded.
 
-The care graph adds an explainable reasoning layer. For example, if a user says they feel dizzy, the system can connect this signal to fall risk, recommend sitting down, and suggest caregiver support when needed.
+The care graph adds an explainable reasoning layer.
+For example, if a user says they feel dizzy, the system can connect this signal to fall risk, recommend sitting down, and suggest caregiver support when needed.
 
 ### Limitations
 
@@ -91,9 +92,6 @@ This knowledge base is designed for a prototype and has several limitations:
 
 * It is small and does not represent a complete medical database.
 * It should not be used as a replacement for doctors, pharmacists, caregivers, or emergency services.
-* It may not cover rare, complex, or highly specific elderly care situations.
-* Optional Kaggle datasets are skipped if Kaggle credentials are missing.
-* The content should be reviewed by care professionals or medical experts before real deployment.
 
 
 ## Special Feature:
