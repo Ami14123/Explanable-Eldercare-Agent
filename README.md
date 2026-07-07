@@ -60,35 +60,58 @@ Normal live mode targets `llm_calls_this_turn = 1`. Router logic, broad agents, 
 
 ## Knowledge Base
 
-Data sources used
-• Curated local Markdown files in data/knowledge/
-• Local FAISS vector store for RAG retrieval
-• Lightweight care knowledge graph in app/care_graph.py
-• SQLite conversation memory for recent chat context
-• Optional Kaggle datasets for spam, fall detection, and medication adherence
+The ElderGuard AI agent uses a small, curated knowledge base to support safer and more explainable responses for elderly care scenarios. The knowledge base is designed for prototype use, with a focus on common risks such as medication safety, scam prevention, fall prevention, and general eldercare safety.
 
-Number and type of documents
-• 4 core Markdown knowledge files
-• eldercare_safety.md
-• medication_safety.md
-• scam_prevention.md
-• fall_prevention.md
-• 3 optional Kaggle CSV datasets can be cached in data/raw/
+### Data Sources Used
 
-Why this knowledge source was selected
-• Covers common elderly care risks: safety, medicine, scams, and falls
-• Local files are easy to inspect, update, and explain
-• FAISS allows the system to retrieve relevant care information before generating the answer
-• Care graph adds explainable reasoning paths, such as dizziness → fall risk → sit down → caregiver alert
+The system uses the following knowledge sources:
 
-Limitations
-• Small prototype knowledge base, not a full medical database
-• Not a replacement for doctors, pharmacists, caregivers, or emergency services
-• May not cover rare or complex elderly care situations
-• Kaggle datasets are optional and are skipped if credentials are missing
-• Knowledge should be reviewed by care or medical experts before real deployment
+* Curated local Markdown files stored in `data/knowledge/`
+* Local FAISS vector store for RAG retrieval
+* Lightweight care knowledge graph in `app/care_graph.py`
+* SQLite conversation memory for recent chat context
+* Optional Kaggle datasets for spam detection, fall detection, and medication adherence
 
-## Special Feature: Machine Learning Router
+### Number and Type of Documents
+
+The core knowledge base contains 4 Markdown documents:
+
+* `eldercare_safety.md`
+* `medication_safety.md`
+* `scam_prevention.md`
+* `fall_prevention.md`
+
+In addition, 3 optional Kaggle CSV datasets can be cached in `data/raw/`:
+
+* SMS spam dataset
+* Elderly fall detection dataset
+* Medication adherence dataset
+
+These datasets are optional and are only used when Kaggle credentials are configured.
+
+### Why This Knowledge Source Was Selected
+
+These knowledge sources were selected because they cover common and high impact elderly care risks. The selected topics are practical for real conversations with elderly users, including safety concerns, medication uncertainty, online scams, and fall related risks.
+
+The local Markdown format makes the knowledge base easy to inspect, update, and explain. This is important for transparency because developers can directly review what information the system uses.
+
+FAISS allows the system to retrieve relevant care information before generating an answer. This helps reduce unsupported responses and makes the output more grounded.
+
+The care graph adds an explainable reasoning layer. For example, if a user says they feel dizzy, the system can connect this signal to fall risk, recommend sitting down, and suggest caregiver support when needed.
+
+### Limitations
+
+This knowledge base is designed for a prototype and has several limitations:
+
+* It is small and does not represent a complete medical database.
+* It should not be used as a replacement for doctors, pharmacists, caregivers, or emergency services.
+* It may not cover rare, complex, or highly specific elderly care situations.
+* Optional Kaggle datasets are skipped if Kaggle credentials are missing.
+* The content should be reviewed by care professionals or medical experts before real deployment.
+
+
+## Special Feature:
+### Machine Learning Router to select a specific agent
 Core notebook: https://colab.research.google.com/drive/11870M5ySbG0VZfjGAxaj1xQa9iZhxXmk?usp=sharing
 Dataset: Data mapping +labelling using 3 dataset for 3 agents
 ### Goal
@@ -97,21 +120,9 @@ Dataset: Data mapping +labelling using 3 dataset for 3 agents
 * Output: predicted care area + confidence score
 * Used in agent: helps select which care agents should respond before reasoning
 
-### Pipeline
-
-```mermaid
-flowchart TD
-    A[User Message] --> B[Preprocess Text]
-    B --> C[ML Router Model]
-    C --> D[Predicted Care Area]
-    C --> E[Confidence Score]
-    D --> F[Agent Selection]
-    E --> F
-    F --> G[Activated Agents]
-```
 
 
-## Simple Interface for different groups of users
+### Simple Interface for different groups of users
 
 ```mermaid
 flowchart LR
@@ -132,7 +143,7 @@ flowchart LR
     D --> D3[Guardrail and RAG trace]
 ```
 
-## Retrieval and Memory
+### Retrieval and Memory
 
 ```mermaid
 flowchart TD
@@ -150,7 +161,7 @@ flowchart TD
     H --> B
 ```
 
-## LLM Modes
+### LLM Modes
 
 ```mermaid
 flowchart LR
